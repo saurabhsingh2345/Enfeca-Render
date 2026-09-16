@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enfeca Render</title>
+  <style>
+    :root {
+      --bg: #12151a;
+      --bg-2: #1a1f27;
+      --line: #2a3340;
+      --text: #e8eef5;
+      --muted: #8b97a8;
+      --accent: #f0753a;
+      --warn: #e8a54b;
+      --danger: #e06b6b;
+      --ok: #6bcf8e;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #3a2416 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+      font: 15px/1.45 "SF Pro Text", system-ui, sans-serif;
+    }
+    main { max-width: 920px; margin: 0 auto; padding: 40px 24px 80px; }
+    .brand { font-size: 26px; font-weight: 700; letter-spacing: -0.03em; margin: 0 0 6px; }
+    .brand span { color: var(--accent); }
+    .lede { margin: 0 0 28px; color: var(--muted); max-width: 52ch; }
+    .panel {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .row { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end; }
+    @media (max-width: 900px) { .row { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
+    label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+    input {
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      font: 500 13px/1.3 ui-monospace, monospace;
+      padding: 10px 12px;
+      width: 100%;
+    }
+    button {
+      font-weight: 600;
+      font-size: 13px;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #1a0d06; }
+    .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+    .btn-dl { background: color-mix(in srgb, var(--ok) 22%, var(--bg-2)); color: var(--ok); }
+    .btn-danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .toolbar h2 { margin: 0; font-size: 18px; }
+    .status { font-size: 13px; color: var(--muted); min-height: 1.2em; }
+    .status.err { color: var(--danger); }
+    .list { display: flex; flex-direction: column; gap: 10px; }
+    .item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: center;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--bg-2);
+    }
+    .title { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+    .meta { margin: 0; font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .progress { margin-top: 10px; height: 4px; background: var(--line); border-radius: 99px; overflow: hidden; }
+    .progress > i { display: block; height: 100%; background: var(--accent); }
+    .empty { padding: 36px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: var(--radius); }
+    .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
+    .pill.running { color: var(--warn); }
+    .pill.done, .pill.ready { color: var(--ok); }
+    .pill.error, .pill.failed { color: var(--danger); }
+    .pill.stuck { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+    .pill.down { color: var(--muted); }
+    .errbox {
+      margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+      color: #f0c0c0; font-family: ui-monospace, monospace; font-size: 11px; white-space: pre-wrap;
+    }
+    .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+    .worker {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 10px;
+      background: var(--bg);
+    }
+    .worker-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .worker-title { font-weight: 600; font-size: 14px; margin: 0; }
+    .worker-meta { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+    .job-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-top: 8px;
+      background: var(--bg-2);
+    }
+    .job-row.stuck { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+    .job-name { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
+    .job-detail { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; margin: 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1 class="brand">Enfeca <span>Render</span></h1>
+      <p class="lede">Pull Ready-for-HD jobs from <strong>divstudio.lovable.app</strong>, encode on this Mac (workers 3853/3854), upload MP4 back. First-time setup: run <code>bash setup.sh</code> in this folder. Then paste <strong>RENDER_API_KEY</strong>, set a <strong>machine name</strong>, and render.</p>
+    </header>
+
+    <section class="panel">
+      <h2>Connection</h2>
+      <div class="row">
+        <label>
+          Studio URL
+          <input id="studioUrl" type="url" placeholder="https://divstudio.lovable.app" autocomplete="off" />
+        </label>
+        <label>
+          RENDER_API_KEY
+          <input id="apiKey" type="password" placeholder="from Lovable Secrets" autocomplete="off" />
+        </label>
+        <label>
+          Machine name
+          <input id="renderMachine" type="text" placeholder="mac-1" autocomplete="off" />
+        </label>
+        <button class="btn-primary" id="saveCfg" type="button">Save</button>
+      </div>
+      <p class="status" id="cfgStatus" style="margin:10px 0 0"></p>
+      <p class="note" id="agentStatus"></p>
+      <p class="note"><label><input id="autoClaim" type="checkbox" /> Auto-claim oldest waiting job (FIFO queue from Lovable)</label></p>
+    </section>
+
+    <section class="panel" id="agentsPanel">
+      <div class="toolbar">
+        <h2 style="font-size:18px;text-transform:none;letter-spacing:0;color:var(--text)">HD Workers</h2>
+        <button class="btn-ghost" id="refreshAgents" type="button">Refresh</button>
+      </div>
+      <p class="note">Active jobs on each render agent. <strong>Stuck</strong> = worker down or no progress for 90s+. <strong>Stop</strong> kills the encode and clears the worker slot.</p>
+      <div id="agentsList"></div>
+    </section>
+
+    <div class="toolbar">
+      <h2>Ready for HD</h2>
+      <div style="display:flex;gap:8px">
+        <button class="btn-primary" id="claimNext" type="button">Claim next</button>
+        <button class="btn-ghost" id="refresh" type="button">Refresh</button>
+      </div>
+    </div>
+    <p class="status" id="listStatus"></p>
+    <div class="list" id="list"></div>
+
+    <div class="toolbar" style="margin-top:28px">
+      <h2>Completed on this Mac</h2>
+    </div>
+    <p class="status" id="doneStatus"></p>
+    <div class="list" id="doneList"></div>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let pollTimer = null;
+    let agentPollTimer = null;
+
+    async function loadConfig() {
+      const cfg = await (await fetch("/api/config")).json();
+      $("studioUrl").value = cfg.studioUrl || "https://divstudio.lovable.app";
+      $("renderMachine").value = cfg.renderMachine || "";
+      $("autoClaim").checked = Boolean(cfg.autoClaim);
+      if (cfg.hasKey) $("apiKey").placeholder = "•••••••• (saved)";
+      cfgStatusReady(cfg);
+      const h = await fetch("/api/health").then((r) => r.json()).catch(() => null);
+      if (h?.agents) {
+        const bits = Object.entries(h.agents).map(([p, v]) =>
+          v ? `${p} up` : `${p} down`
+        );
+        $("agentStatus").textContent = "HD workers: " + bits.join(" · ") + " · 8080/3850 unused";
+      }
+    }
+    function cfgStatusReady(cfg) {
+      $("cfgStatus").className = "status";
+      $("cfgStatus").textContent = cfg.hasKey && cfg.studioUrl
+        ? `Ready · ${cfg.studioUrl} · MP4s ${cfg.outDir}`
+        : "Paste RENDER_API_KEY from Lovable Secrets, then Save.";
+    }
+
+    $("saveCfg").onclick = async () => {
+      $("cfgStatus").textContent = "Saving…";
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studioUrl: $("studioUrl").value.trim(),
+          apiKey: $("apiKey").value.trim(),
+          renderMachine: $("renderMachine").value.trim(),
+          autoClaim: $("autoClaim").checked,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        $("cfgStatus").className = "status err";
+        $("cfgStatus").textContent = data.error || "Save failed";
+        return;
+      }
+      $("apiKey").value = "";
+      $("apiKey").placeholder = "•••••••• (saved)";
+      await loadConfig();
+      await refresh();
+    };
+
+    $("refresh").onclick = () => { refresh(); refreshAgents(); };
+
+    $("claimNext").onclick = async () => {
+      $("listStatus").textContent = "Claiming next job…";
+      const res = await fetch("/api/render/claim", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        $("listStatus").className = "status err";
+        $("listStatus").textContent = data.error || "Claim failed";
+        return;
+      }
+      if (!data.job?.id) {
+        $("listStatus").textContent = "No jobs waiting in the Lovable queue.";
+        return;
+      }
+      schedulePoll();
+      await refresh();
+      await refreshAgents();
+    };
+
+    async function refreshAgents() {
+      try {
+        const res = await fetch("/api/agents");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        renderAgents(data.agents || []);
+        const anyStuck = (data.agents || []).some((w) => w.stuckCount > 0 || !w.up);
+        if (anyStuck || (data.agents || []).some((w) => w.jobs?.length)) scheduleAgentPoll();
+        else clearAgentPoll();
+      } catch (err) {
+        $("agentsList").innerHTML = `<div class="empty err">${esc(err.message)}</div>`;
+      }
+    }
+
+    function renderAgents(workers) {
+      if (!workers.length) {
+        $("agentsList").innerHTML = `<div class="empty">No HD workers configured.</div>`;
+        return;
+      }
+      $("agentsList").innerHTML = workers.map((w) => {
+        const statusPill = w.up
+          ? `<span class="pill done">up</span>`
+          : `<span class="pill down">down</span>`;
+        const jobs = (w.jobs || []).length
+          ? w.jobs.map((j) => {
+              const stuck = j.stuck ? `<span class="pill stuck">stuck · ${esc(j.stuckReason || "stalled")}</span>` : "";
+              return `<div class="job-row${j.stuck ? " stuck" : ""}" data-port="${w.port}" data-job="${esc(j.id)}">
+                <div>
+                  <p class="job-name">${esc(j.filename)}${stuck}</p>
+                  <p class="job-detail">${esc(j.status)} · ${j.progress || 0}% · ${esc(j.stage || "")} · idle ${j.ageSec || 0}s · ${esc(j.id.slice(0, 8))}</p>
+                </div>
+                <button class="btn-ghost btn-danger" data-act="remove-job">Stop</button>
+              </div>`;
+            }).join("")
+          : `<p class="note" style="margin:0">No active jobs — idle.</p>`;
+        return `<div class="worker" data-port="${w.port}">
+          <div class="worker-head">
+            <div>
+              <p class="worker-title">Worker ${w.port} ${statusPill}${w.stuckCount ? `<span class="pill stuck">${w.stuckCount} stuck</span>` : ""}</p>
+              <p class="worker-meta">pid ${w.pid || "—"} · ${esc(w.jobsDir || "")}</p>
+            </div>
+            <button class="btn-ghost" data-act="restart-worker" ${w.up ? "" : ""}>Restart worker</button>
+          </div>
+          ${jobs}
+        </div>`;
+      }).join("");
+    }
+
+    $("refreshAgents").onclick = () => refreshAgents();
+
+    $("agentsList").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-act]");
+      if (!btn) return;
+      const row = btn.closest(".job-row");
+      const worker = btn.closest(".worker");
+      const port = row?.dataset.port || worker?.dataset.port;
+      if (btn.dataset.act === "remove-job") {
+        const jobId = row?.dataset.job;
+        if (!port || !jobId) return;
+        if (!confirm(`Stop encode on worker ${port}?\n${jobId}`)) return;
+        btn.disabled = true;
+        const res = await fetch(`/api/agents/${port}/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) alert(data.error || "Remove failed");
+        await refreshAgents();
+        await refresh();
+        return;
+      }
+      if (btn.dataset.act === "restart-worker") {
+        if (!port) return;
+        if (!confirm(`Restart HD worker on port ${port}? Running encodes on this worker will stop.`)) return;
+        btn.disabled = true;
+        const res = await fetch(`/api/agents/${port}/restart`, { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) alert(data.error || "Restart failed");
+        await refreshAgents();
+        await loadConfig();
+      }
+    });
+
+    function scheduleAgentPoll() {
+      clearAgentPoll();
+      agentPollTimer = setInterval(refreshAgents, 4000);
+    }
+    function clearAgentPoll() {
+      if (agentPollTimer) clearInterval(agentPollTimer);
+      agentPollTimer = null;
+    }
+
+
+    async function refresh() {
+      $("listStatus").className = "status";
+      $("listStatus").textContent = "Loading…";
+      try {
+        const res = await fetch("/api/bundles");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        renderList(data.bundles || []);
+        renderCompleted(data.completed || []);
+        const ready = (data.bundles || []).length;
+        const done = (data.completed || []).length;
+        $("listStatus").textContent = ready
+          ? `${ready} part(s) waiting for HD`
+          : "Nothing waiting — mark a part Ready for HD on the website.";
+        $("doneStatus").textContent = done
+          ? `${done} MP4(s) on this Mac`
+          : "No finished MP4s in the output folder yet.";
+        const running = (data.bundles || []).some((b) => b.job?.status === "running");
+        if (running) schedulePoll();
+        else clearPoll();
+      } catch (err) {
+        $("listStatus").className = "status err";
+        $("listStatus").textContent = err.message;
+        $("list").innerHTML = "";
+      }
+    }
+
+    function renderList(bundles) {
+      if (!bundles.length) {
+        $("list").innerHTML = `<div class="empty">No Ready-for-HD parts right now. On the website, stitch a part and click <strong>Ready for HD</strong>.</div>`;
+        return;
+      }
+      $("list").innerHTML = bundles.map((b) => {
+        const job = b.job;
+        const st = job?.status || b.status || "";
+        const pill = st ? `<span class="pill ${st}">${st}${st === "running" ? ` ${job?.progress || 0}%` : ""}</span>` : "";
+        const progress = job?.status === "running"
+          ? `<div class="progress"><i style="width:${job.progress || 0}%"></i></div>` : "";
+        const err = job?.status === "error"
+          ? `<pre class="errbox">${esc(job.error || job.stage || "failed")}</pre>` : "";
+        const canDl = Boolean(b.mp4Ready || job?.status === "done");
+        const busy = job?.status === "running";
+        const errored = job?.status === "error";
+        const stopBtn = busy
+          ? `<button class="btn-ghost btn-danger" data-act="stop">Stop</button>`
+          : "";
+        return `<article class="item" data-id="${esc(b.id)}">
+          <div>
+            <h3 class="title">${esc(b.title)}${pill}</h3>
+            <p class="meta">${esc([b.ownerEmail, b.partTitle, b.sceneCount != null ? `${b.sceneCount} scenes` : "", b.readyAt ? new Date(b.readyAt).toLocaleString() : ""].filter(Boolean).join(" · "))}${job?.stage ? ` · ${esc(job.stage)}` : ""}</p>
+            ${progress}${err}
+          </div>
+          <div class="actions">
+            <button class="btn-primary" data-act="render" ${busy ? "disabled" : ""}>${busy ? "Encoding…" : errored ? "Retry" : "Render"}</button>
+            ${stopBtn}
+            <button class="btn-ghost btn-danger" data-act="delete">Delete</button>
+            <button class="btn-dl" data-act="download" ${canDl ? "" : "disabled"}>Download</button>
+          </div>
+        </article>`;
+      }).join("");
+    }
+
+    function renderCompleted(items) {
+      if (!items.length) {
+        $("doneList").innerHTML = `<div class="empty">Finished encodes appear here with a <strong>Download</strong> button, even after the cloud marks them done.</div>`;
+        return;
+      }
+      $("doneList").innerHTML = items.map((b) => {
+        const when = b.completedAt ? new Date(b.completedAt).toLocaleString() : "";
+        return `<article class="item" data-id="${esc(b.id)}">
+          <div>
+            <h3 class="title">${esc(b.title || b.filename)}<span class="pill done">done</span></h3>
+            <p class="meta">${esc(b.filename || "")}${when ? ` · ${esc(when)}` : ""}</p>
+          </div>
+          <div class="actions">
+            <button class="btn-dl" data-act="download">Download</button>
+            <button class="btn-ghost btn-danger" data-act="delete">Delete</button>
+          </div>
+        </article>`;
+      }).join("");
+    }
+
+    $("list").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-act]");
+      if (!btn) return;
+      const id = btn.closest(".item")?.dataset.id;
+      if (!id) return;
+      if (btn.dataset.act === "render") {
+        btn.disabled = true;
+        const res = await fetch(`/api/render/${encodeURIComponent(id)}`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          $("listStatus").className = "status err";
+          $("listStatus").textContent = data.error || "Could not start";
+        }
+        schedulePoll();
+        await refresh();
+        await refreshAgents();
+        return;
+      }
+      if (btn.dataset.act === "stop") {
+        if (!confirm("Stop this HD encode? The part stays in Ready for HD so you can Render again.")) return;
+        btn.disabled = true;
+        const res = await fetch(`/api/render/${encodeURIComponent(id)}`, { method: "DELETE" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          $("listStatus").className = "status err";
+          $("listStatus").textContent = data.error || "Stop failed";
+          btn.disabled = false;
+          return;
+        }
+        clearPoll();
+        await refresh();
+        await refreshAgents();
+        return;
+      }
+      if (btn.dataset.act === "delete") {
+        const busy = btn.closest(".item")?.querySelector(".pill.running");
+        const label = busy
+          ? "Stop the encode and remove this part from Ready for HD?"
+          : "Remove this part from Ready for HD? It will disappear from this list.";
+        if (!confirm(label)) return;
+        btn.disabled = true;
+        const res = await fetch(`/api/bundles/${encodeURIComponent(id)}`, { method: "DELETE" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          $("listStatus").className = "status err";
+          $("listStatus").textContent = data.error || "Delete failed";
+          btn.disabled = false;
+          return;
+        }
+        clearPoll();
+        await refresh();
+        await refreshAgents();
+        return;
+      }
+      if (btn.dataset.act === "download") {
+        window.location.href = `/api/download/${encodeURIComponent(id)}`;
+      }
+    });
+
+    $("doneList").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-act]");
+      if (!btn) return;
+      const id = btn.closest(".item")?.dataset.id;
+      if (!id) return;
+      if (btn.dataset.act === "download") {
+        window.location.href = `/api/download/${encodeURIComponent(id)}`;
+        return;
+      }
+      if (btn.dataset.act === "delete") {
+        if (!confirm("Delete this MP4 from this Mac?")) return;
+        btn.disabled = true;
+        const res = await fetch(`/api/completed/${encodeURIComponent(id)}`, { method: "DELETE" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          $("doneStatus").className = "status err";
+          $("doneStatus").textContent = data.error || "Delete failed";
+          btn.disabled = false;
+          return;
+        }
+        await refresh();
+      }
+    });
+
+    function schedulePoll() {
+      clearPoll();
+      pollTimer = setInterval(refresh, 3000);
+    }
+    function clearPoll() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+
+    loadConfig().then(() => { refresh(); refreshAgents(); });
+  </script>
+</body>
+</html>

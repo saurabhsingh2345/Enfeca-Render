@@ -1,0 +1,13 @@
+{
+  "name": "enfeca-render",
+  "private": true,
+  "description": "Self-contained Enfeca HD render stack for Div Studio / Lovable",
+  "scripts": {
+    "setup": "bash setup.sh",
+    "start": "node cloud/server.mjs",
+    "doctor": "bash scripts/doctor.sh",
+    "services:install": "bash scripts/install-services.sh",
+    "services:restart": "bash scripts/restart-services.sh",
+    "services:stop": "bash scripts/stop-services.sh"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "enfeca-render-cloud",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}

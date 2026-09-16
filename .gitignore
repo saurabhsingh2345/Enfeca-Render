@@ -1,0 +1,10 @@
+node_modules/
+.env
+data/out/*.mp4
+data/completed/
+data/dismissed.json
+worker-3853/data/jobs/
+worker-3854/data/jobs/
+worker-3853/data/out/
+worker-3854/data/out/
+.DS_Store
