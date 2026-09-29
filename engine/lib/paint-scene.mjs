@@ -417,18 +417,30 @@ function drawMcqBoard(ctx, scene, progress, x, y, w, h) {
   ctx.globalAlpha = 1;
 
   const optStart = isPredict ? 3 : 2;
+  const optionLineH = fontOption * 1.35;
+  const optionPadY = Math.max(8, fontOption * 0.35);
+  const markerColW = optionH * 0.28 + markerSize + optionH * 0.25;
+  const maxOptTextW = innerW - markerColW - Math.round(padX * 0.15);
+  let optY = cy;
+
   opts.slice(0, 4).forEach((opt, i) => {
     const alpha = revealAlpha(progress, optStart + i, steps.length);
     if (alpha <= 0) return;
     ctx.globalAlpha = alpha;
-    const oy = cy + i * (optionH + optionGap);
-    roundRect(ctx, x + padX, oy, innerW, optionH, optionH * 0.22);
+
+    const label = `${String.fromCharCode(65 + i)}. ${opt}`;
+    ctx.font = canvasFont(600, fontOption);
+    const lines = wrapLines(ctx, label, maxOptTextW);
+    const boxH = Math.max(optionH, lines.length * optionLineH + optionPadY * 2);
+    const oy = optY;
+
+    roundRect(ctx, x + padX, oy, innerW, boxH, boxH * 0.22);
     ctx.strokeStyle = OPTION_ACCENT;
-    ctx.lineWidth = Math.max(1.5, optionH * 0.04);
+    ctx.lineWidth = Math.max(1.5, boxH * 0.04);
     ctx.stroke();
 
     const mx = x + padX + optionH * 0.28;
-    const my = oy + optionH / 2;
+    const my = oy + boxH / 2;
     if (scene.questionKind === "msq" || scene.predictSelectMode === "msq") {
       roundRect(ctx, mx, my - markerSize / 2, markerSize, markerSize, markerSize * 0.22);
       ctx.stroke();
@@ -439,10 +451,17 @@ function drawMcqBoard(ctx, scene, progress, x, y, w, h) {
     }
 
     ctx.fillStyle = "#111827";
-    ctx.font = canvasFont(600, fontOption);
-    ctx.textBaseline = "middle";
-    const label = `${String.fromCharCode(65 + i)}. ${opt}`;
-    ctx.fillText(label, mx + markerSize + optionH * 0.25, my);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    const textX = mx + markerSize + optionH * 0.25;
+    const blockH = lines.length * optionLineH;
+    let textY = oy + (boxH - blockH) / 2 + fontOption * 0.08;
+    for (const line of lines) {
+      ctx.fillText(line, textX, textY);
+      textY += optionLineH;
+    }
+
+    optY += boxH + optionGap;
     ctx.globalAlpha = 1;
   });
 }

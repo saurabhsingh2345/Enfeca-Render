@@ -565,33 +565,51 @@ async function bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps) {
   return { imgs, fps: sampleFps };
 }
 
+function pinStudioPath(pathname, origin) {
+  const path = pathname.startsWith("/api/assets/")
+    ? `/api/public/assets/${pathname.slice("/api/assets/".length)}`
+    : pathname;
+  return `${String(origin).replace(/\/$/, "")}${path}`;
+}
+
 function resolveAssetUrl(url, studioUrl) {
   if (!url) return url;
-  if (/^https?:\/\//i.test(url) || url.startsWith("data:")) {
-    const origin = studioUrl ? String(studioUrl).replace(/\/$/, "") : "";
-    const backend = String(url).match(
-      /^https?:\/\/[^/]+\.lovableproject\.com(\/(?:api\/(?:public\/)?assets\/.*))$/i,
-    );
-    if (origin && backend) {
-      const path = backend[1].startsWith("/api/assets/")
-        ? `/api/public/assets/${backend[1].slice("/api/assets/".length)}`
-        : backend[1];
-      return `${origin}${path}`;
-    }
-    return url;
-  }
+  if (String(url).startsWith("data:")) return url;
   if (url.startsWith("blob:")) {
     throw new Error(
       `Blob URL cannot be fetched by the agent. Re-save the part in Studio so media is stored under /api/assets.`,
     );
   }
-  if (url.startsWith("/") && studioUrl) {
-    return `${String(studioUrl).replace(/\/$/, "")}${url}`;
+  const origin = studioUrl ? String(studioUrl).replace(/\/$/, "") : "";
+  if (!origin) return url;
+  if (url.startsWith("/api/assets/")) return pinStudioPath(url, origin);
+  if (url.startsWith("/api/public/assets/")) return `${origin}${url}`;
+  if (url.startsWith("/") && !url.startsWith("//")) return `${origin}${url}`;
+  if (!/^https?:\/\//i.test(url)) return url;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
   }
-  return url;
+  let originHost = "";
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return url;
+  }
+  const staleHost =
+    parsed.host !== originHost &&
+    (/\/api\/(public\/)?assets\//i.test(parsed.pathname) ||
+      parsed.host === "divstudio.enfeca.com" ||
+      parsed.host === "divstudio.lovable.app" ||
+      /\.lovableproject\.com$/i.test(parsed.host));
+  if (!staleHost) return url;
+  return `${pinStudioPath(parsed.pathname, origin)}${parsed.search}`;
 }
 
 async function fetchToFile(url, dest, authToken, { retries = 3 } = {}) {
+  authToken = authToken || process.env.RENDER_API_KEY || "";
   if (String(url).startsWith("data:")) {
     const m = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(String(url));
     if (!m) throw new Error("Invalid data URL");
@@ -1271,7 +1289,7 @@ export async function encodeExportJob({
   onProgress,
 }) {
   // Local-only encode on this Mac — never starts a Studio SERVER job.
-  const authToken = job.authToken || null;
+  const authToken = job.authToken || process.env.RENDER_API_KEY || null;
   const studioUrl = job.studioUrl || "";
 
   const ffmpeg = resolveFfmpeg();

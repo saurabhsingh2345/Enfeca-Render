@@ -469,24 +469,48 @@ function extractPayload(bundle) {
   return rest;
 }
 
+function pinStudioPath(pathname, origin) {
+  const path = pathname.startsWith("/api/assets/")
+    ? `/api/public/assets/${pathname.slice("/api/assets/".length)}`
+    : pathname;
+  return `${String(origin).replace(/\/$/, "")}${path}`;
+}
+
+function rewriteStudioUrl(value, origin) {
+  if (!origin || typeof value !== "string") return value;
+  const originNorm = String(origin).replace(/\/$/, "");
+  if (value.startsWith("/api/assets/")) {
+    return pinStudioPath(value, originNorm);
+  }
+  if (value.startsWith("/api/public/assets/")) return `${originNorm}${value}`;
+  if (value.startsWith("/") && !value.startsWith("//")) return `${originNorm}${value}`;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return value;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return value;
+  let originHost = "";
+  try {
+    originHost = new URL(originNorm).host;
+  } catch {
+    return value;
+  }
+  const staleHost =
+    parsed.host !== originHost &&
+    (/\/api\/(public\/)?assets\//i.test(parsed.pathname) ||
+      parsed.host === "divstudio.enfeca.com" ||
+      parsed.host === "divstudio.lovable.app" ||
+      /\.lovableproject\.com$/i.test(parsed.host));
+  if (!staleHost) return value;
+  return `${pinStudioPath(parsed.pathname, originNorm)}${parsed.search}`;
+}
+
 function rewriteCloudUrls(value, origin) {
   if (typeof value === "string") {
-    // Bundles often store full *.lovableproject.com URLs; RENDER_API_KEY only works via Studio origin.
-    const backend = value.match(
-      /^https?:\/\/[^/]+\.lovableproject\.com(\/(?:api\/(?:public\/)?assets\/.*))$/i,
-    );
-    if (backend) {
-      const path = backend[1].startsWith("/api/assets/")
-        ? `/api/public/assets/${backend[1].slice("/api/assets/".length)}`
-        : backend[1];
-      return `${origin}${path}`;
-    }
-    if (value.startsWith("/api/assets/")) {
-      return `${origin}/api/public/assets/${value.slice("/api/assets/".length)}`;
-    }
-    if (value.startsWith("/api/public/assets/")) return `${origin}${value}`;
-    if (value.startsWith("/") && !value.startsWith("//")) return `${origin}${value}`;
-    return value;
+    // Asset URLs are often stored on an old Studio host; the API key only works on STUDIO_URL.
+    return rewriteStudioUrl(value, origin);
   }
   if (Array.isArray(value)) return value.map((v) => rewriteCloudUrls(v, origin));
   if (value && typeof value === "object") {

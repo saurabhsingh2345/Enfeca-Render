@@ -35,6 +35,9 @@ export function startAgent(opts = {}) {
   const appRoot = opts.appRoot || process.env.AGENT_APP_ROOT || __dirname;
   const dataRoot = opts.dataRoot || process.env.AGENT_DATA_ROOT || appRoot;
   loadEnv(path.join(appRoot, ".env"));
+  // Isolated workers run from engine/; the render key lives in the stack root .env.
+  loadEnv(path.join(appRoot, "..", ".env"));
+  if (dataRoot !== appRoot) loadEnv(path.join(dataRoot, "..", ".env"));
 
   const PORT = Number(opts.port || process.env.PORT || STABLE_PORT);
   const HOST = opts.host || process.env.HOST || "127.0.0.1";

@@ -78,7 +78,7 @@ export function createJobStore(rootDir) {
     get(id) {
       const job = jobs.get(id);
       if (!job) return undefined;
-      const token = secrets.get(id);
+      const token = secrets.get(id) || process.env.RENDER_API_KEY || "";
       return token ? { ...job, authToken: token } : job;
     },
 
