@@ -15,12 +15,15 @@ import {
   resolveCodeBeatFrame,
   resolveCodeTypingBeats,
 } from "./code-typing.mjs";
+import {
+  canvasTemplateGradient,
+  resolveTemplateColor,
+  resolveTemplateTheme,
+  templatePalette,
+} from "./template-theme.mjs";
 
 const CARD_PAD = 0.04;
-const OPTION_ACCENT = "#f67e00";
-const GRADIENT_STOPS = ["#ffb404", "#f67e00", "#e13900"];
 const FIXED_TEMPLATE_FONT = 100;
-const FIXED_TEMPLATE_COLOR = "#1a1a1a";
 const INTRO_DEFAULT = "Now test your understanding";
 const CODING_INTRO_DEFAULT = "Now let's try to solve a coding problem";
 const MARK_DEFAULT = "Mark your answers";
@@ -276,17 +279,11 @@ function questionTimeline(elapsedMs, scene, speechMs) {
   };
 }
 
-function orangeGradient(ctx, x0, y0, x1, y1) {
-  const g = ctx.createLinearGradient(x0, y0, x1, y1);
-  g.addColorStop(0, GRADIENT_STOPS[0]);
-  g.addColorStop(0.5, GRADIENT_STOPS[1]);
-  g.addColorStop(1, GRADIENT_STOPS[2]);
-  return g;
-}
-
-function drawIntroScreen(ctx, x, y, w, h, text) {
+function drawIntroScreen(ctx, x, y, w, h, text, theme) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = canvasTemplateGradient(ctx, theme, x + w * 0.38, y, x + w * 0.62, y);
+  ctx.fillRect(x + w * 0.38, y + h * 0.38, w * 0.24, Math.max(4, h * 0.01));
   const titleSize = Math.max(22, Math.round(Math.min(w, h) * 0.06));
   ctx.fillStyle = "#111827";
   ctx.font = canvasFont(700, titleSize);
@@ -295,7 +292,7 @@ function drawIntroScreen(ctx, x, y, w, h, text) {
   ctx.fillText(text || INTRO_DEFAULT, x + w / 2, y + h / 2);
 }
 
-function drawMarkScreen(ctx, x, y, w, h, secondsLeft, holdSec, markText) {
+function drawMarkScreen(ctx, x, y, w, h, secondsLeft, holdSec, markText, theme) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(x, y, w, h);
 
@@ -329,7 +326,7 @@ function drawMarkScreen(ctx, x, y, w, h, secondsLeft, holdSec, markText) {
 
   const shown = Math.max(0, secondsLeft);
   const frac = holdSec > 0 ? Math.min(1, shown / holdSec) : 0;
-  const grad = orangeGradient(ctx, cx - ringR, ringCy, cx + ringR, ringCy);
+  const grad = canvasTemplateGradient(ctx, theme, cx - ringR, ringCy, cx + ringR, ringCy);
   if (frac > 0) {
     ctx.beginPath();
     ctx.arc(cx, ringCy, ringR, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
@@ -357,12 +354,12 @@ function revealAlpha(progress, stepIndex, stepCount) {
   return (progress - start) / Math.max(0.001, end - start);
 }
 
-function drawMcqBoard(ctx, scene, progress, x, y, w, h) {
+function drawMcqBoard(ctx, scene, progress, x, y, w, h, theme) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(x, y, w, h);
 
   const padX = Math.round(w * 0.08);
-  const padY = Math.round(h * 0.07);
+  const padY = Math.round(h * 0.08);
   const innerW = w - padX * 2;
   const q = scene.questionText || scene.subtitle || "Question";
   const opts = Array.isArray(scene.questionOptions) ? scene.questionOptions : [];
@@ -372,12 +369,17 @@ function drawMcqBoard(ctx, scene, progress, x, y, w, h) {
       ? "Select all that apply."
       : "Select one answer.";
 
-  const fontQuestion = Math.max(18, Math.round(h * 0.046));
-  const fontHint = Math.max(11, Math.round(h * 0.028));
-  const fontOption = Math.max(14, Math.round(h * 0.034));
-  const optionH = Math.max(42, Math.round(h * (isPredict ? 0.08 : 0.095)));
-  const optionGap = Math.max(8, Math.round(h * 0.016));
-  const markerSize = Math.max(14, Math.round(h * 0.028));
+  // Sized to match Studio compose preview wrapping on the HD card.
+  const fontQuestion = Math.max(22, Math.round(h * 0.066));
+  const fontHint = Math.max(12, Math.round(h * 0.026));
+  const fontOption = Math.max(16, Math.round(h * 0.041));
+  const optionH = Math.max(44, Math.round(h * (isPredict ? 0.078 : 0.088)));
+  const optionGap = Math.max(10, Math.round(h * 0.018));
+  const markerSize = Math.max(16, Math.round(h * 0.032));
+  const optionLineH = fontOption * 1.28;
+  const optionPadY = Math.max(10, Math.round(optionH * 0.2));
+  const inset = Math.round(optionH * 0.32);
+  const strokeW = Math.max(2, Math.round(h * 0.0024));
 
   let cy = y + padY;
   const steps = isPredict
@@ -389,9 +391,9 @@ function drawMcqBoard(ctx, scene, progress, x, y, w, h) {
   ctx.font = canvasFont(700, fontQuestion);
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  for (const line of wrapLines(ctx, q, innerW).slice(0, 3)) {
+  for (const line of wrapLines(ctx, q, innerW).slice(0, 4)) {
     ctx.fillText(line, x + padX, cy);
-    cy += fontQuestion * 1.22;
+    cy += fontQuestion * 1.28;
   }
   ctx.globalAlpha = 1;
 
@@ -407,20 +409,16 @@ function drawMcqBoard(ctx, scene, progress, x, y, w, h) {
     ctx.globalAlpha = 1;
   }
 
-  cy += fontHint * 1.1;
+  cy += fontHint * 1.25;
   const hintIdx = isPredict ? 2 : 1;
   ctx.globalAlpha = revealAlpha(progress, hintIdx, steps.length);
   ctx.font = canvasFont(600, fontHint);
   ctx.fillStyle = "#6b7280";
   ctx.fillText(hint, x + padX, cy);
-  cy += fontHint * 1.4 + optionGap;
+  cy += fontHint * 1.7 + optionGap;
   ctx.globalAlpha = 1;
 
   const optStart = isPredict ? 3 : 2;
-  const optionLineH = fontOption * 1.35;
-  const optionPadY = Math.max(8, fontOption * 0.35);
-  const markerColW = optionH * 0.28 + markerSize + optionH * 0.25;
-  const maxOptTextW = innerW - markerColW - Math.round(padX * 0.15);
   let optY = cy;
 
   opts.slice(0, 4).forEach((opt, i) => {
@@ -428,37 +426,47 @@ function drawMcqBoard(ctx, scene, progress, x, y, w, h) {
     if (alpha <= 0) return;
     ctx.globalAlpha = alpha;
 
-    const label = `${String.fromCharCode(65 + i)}. ${opt}`;
+    const letter = `${String.fromCharCode(65 + i)}. `;
     ctx.font = canvasFont(600, fontOption);
-    const lines = wrapLines(ctx, label, maxOptTextW);
+    const letterW = ctx.measureText(letter).width;
+    const radioX = x + padX + inset;
+    const textX = radioX + markerSize + Math.round(optionH * 0.28);
+    const bodyX = textX + letterW;
+    const rightPad = Math.round(innerW * 0.08);
+    const bodyW = Math.max(80, x + padX + innerW - rightPad - bodyX);
+    const lines = wrapLines(ctx, String(opt), bodyW).slice(0, 3);
     const boxH = Math.max(optionH, lines.length * optionLineH + optionPadY * 2);
     const oy = optY;
 
-    roundRect(ctx, x + padX, oy, innerW, boxH, boxH * 0.22);
-    ctx.strokeStyle = OPTION_ACCENT;
-    ctx.lineWidth = Math.max(1.5, boxH * 0.04);
+    const accent = templatePalette(theme).accent;
+    const pillGrad = canvasTemplateGradient(ctx, theme, x + padX, oy, x + padX + innerW, oy);
+    roundRect(ctx, x + padX, oy, innerW, boxH, boxH / 2);
+    ctx.strokeStyle = pillGrad;
+    ctx.lineWidth = strokeW;
     ctx.stroke();
 
-    const mx = x + padX + optionH * 0.28;
     const my = oy + boxH / 2;
+    ctx.strokeStyle = accent;
     if (scene.questionKind === "msq" || scene.predictSelectMode === "msq") {
-      roundRect(ctx, mx, my - markerSize / 2, markerSize, markerSize, markerSize * 0.22);
+      roundRect(ctx, radioX, my - markerSize / 2, markerSize, markerSize, markerSize * 0.22);
       ctx.stroke();
     } else {
       ctx.beginPath();
-      ctx.arc(mx + markerSize / 2, my, markerSize / 2, 0, Math.PI * 2);
+      ctx.arc(radioX + markerSize / 2, my, markerSize / 2, 0, Math.PI * 2);
       ctx.stroke();
     }
 
-    ctx.fillStyle = "#111827";
+    ctx.fillStyle = canvasTemplateGradient(ctx, theme, textX, oy, bodyX + letterW, oy);
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    const textX = mx + markerSize + optionH * 0.25;
     const blockH = lines.length * optionLineH;
-    let textY = oy + (boxH - blockH) / 2 + fontOption * 0.08;
-    for (const line of lines) {
-      ctx.fillText(line, textX, textY);
+    let textY = oy + (boxH - blockH) / 2 + fontOption * 0.06;
+    ctx.fillText(letter, textX, textY);
+    ctx.fillStyle = "#111827";
+    ctx.fillText(lines[0] || "", bodyX, textY);
+    for (let li = 1; li < lines.length; li++) {
       textY += optionLineH;
+      ctx.fillText(lines[li], bodyX, textY);
     }
 
     optY += boxH + optionGap;
@@ -466,7 +474,7 @@ function drawMcqBoard(ctx, scene, progress, x, y, w, h) {
   });
 }
 
-function drawCodingBoard(ctx, scene, progress, x, y, w, h) {
+function drawCodingBoard(ctx, scene, progress, x, y, w, h, theme) {
   ctx.save();
   ctx.fillStyle = "#f7f8fa";
   ctx.fillRect(x, y, w, h);
@@ -500,6 +508,9 @@ function drawCodingBoard(ctx, scene, progress, x, y, w, h) {
     ctx.stroke();
 
     let cy = y + pad;
+    ctx.fillStyle = canvasTemplateGradient(ctx, theme, x + pad, cy, x + pad * 6, cy);
+    ctx.fillRect(x + pad, cy, pad * 5, Math.max(3, h * 0.006));
+    cy += pad * 1.2;
     ctx.fillStyle = "#111827";
     ctx.font = sansFont(600, fontTitle);
     ctx.textAlign = "left";
@@ -665,7 +676,7 @@ function drawCodingBoard(ctx, scene, progress, x, y, w, h) {
   ctx.restore();
 }
 
-function paintQuestion(ctx, scene, card, elapsedMs, speechMs) {
+function paintQuestion(ctx, scene, card, elapsedMs, speechMs, theme) {
   const boardPad = Math.round(Math.min(card.w, card.h) * 0.04);
   const bx = card.x + boardPad;
   const by = card.y + boardPad;
@@ -683,32 +694,46 @@ function paintQuestion(ctx, scene, card, elapsedMs, speechMs) {
   const countdownMs = questionMarkCountdownMs(scene);
 
   if (tl.phase === "intro" || tl.phase === "intro-gap") {
-    drawIntroScreen(ctx, bx, by, bw, bh, introText);
+    drawIntroScreen(ctx, bx, by, bw, bh, introText, theme);
     return;
   }
   if (tl.phase === "mark") {
     const left = markCountdownSeconds(tl.markElapsedMs, countdownMs);
-    drawMarkScreen(ctx, bx, by, bw, bh, left, countdownSec, markText);
+    drawMarkScreen(ctx, bx, by, bw, bh, left, countdownSec, markText, theme);
     return;
   }
   // question + mark-gap: keep full board visible (Studio behavior)
   if (isCoding) {
-    drawCodingBoard(ctx, scene, tl.progress, bx, by, bw, bh);
+    drawCodingBoard(ctx, scene, tl.progress, bx, by, bw, bh, theme);
   } else {
-    drawMcqBoard(ctx, scene, tl.progress, bx, by, bw, bh);
+    drawMcqBoard(ctx, scene, tl.progress, bx, by, bw, bh, theme);
   }
 }
 
-function paintTemplate(ctx, scene, card, t01, elapsedMs, totalMs) {
+function paintTemplate(ctx, scene, card, t01, elapsedMs, totalMs, theme) {
   const kind = scene.templateKind || "text";
   const text = scene.templateText || scene.subtitle || "";
-  const color = scene.templateColor || FIXED_TEMPLATE_COLOR;
+  const color = resolveTemplateColor(scene, theme);
   const fontSize = scene.templateFontSize || FIXED_TEMPLATE_FONT;
   const scale = card.h / 1080;
   const fontPx = Math.max(16, Math.round(fontSize * scale));
 
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(card.x, card.y, card.w, card.h);
+  ctx.fillStyle = canvasTemplateGradient(
+    ctx,
+    theme,
+    card.x + card.w * 0.08,
+    card.y,
+    card.x + card.w * 0.92,
+    card.y,
+  );
+  ctx.fillRect(
+    card.x + card.w * 0.08,
+    card.y + card.h * 0.08,
+    card.w * 0.84,
+    Math.max(3, card.h * 0.006),
+  );
   ctx.fillStyle = color;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -1227,7 +1252,7 @@ function paintImage(ctx, scene, card, t01, assets, durationMs) {
  * @param {*} createCanvas from @napi-rs/canvas
  * @param {number} t01 speech progress 0..1 (images/templates/code)
  * @param {number} durationMs speech duration for non-question scenes
- * @param {{ sceneElapsedMs?: number, speechMs?: number }} opts
+ * @param {{ sceneElapsedMs?: number, speechMs?: number, templateTheme?: "orange" | "blue" }} opts
  */
 export async function paintCanvasScene(
   createCanvas,
@@ -1244,8 +1269,12 @@ export async function paintCanvasScene(
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, W, H);
 
-  // Full-bleed orange loop (Studio-style) — baked into the frame so encode is local-only.
-  if (assets?.bgLoopFrame) {
+  const kind = scene.kind || "image";
+  const theme = resolveTemplateTheme(scene, opts.templateTheme);
+  const useVideoBg =
+    assets?.bgLoopFrame &&
+    !(theme === "blue" && (kind === "question" || kind === "template"));
+  if (useVideoBg) {
     const img = assets.bgLoopFrame;
     const ir = img.width / Math.max(1, img.height);
     const br = W / Math.max(1, H);
@@ -1260,7 +1289,15 @@ export async function paintCanvasScene(
     }
     ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
   } else {
-    ctx.fillStyle = "#E8A35C";
+    const palette = templatePalette(theme);
+    if (theme === "blue") {
+      const stage = ctx.createLinearGradient(0, 0, W, H);
+      stage.addColorStop(0, palette.soft);
+      stage.addColorStop(1, palette.softStrong);
+      ctx.fillStyle = stage;
+    } else {
+      ctx.fillStyle = palette.fallbackFill;
+    }
     ctx.fillRect(0, 0, W, H);
   }
 
@@ -1274,15 +1311,13 @@ export async function paintCanvasScene(
   roundRect(ctx, card.x, card.y, card.w, card.h, r);
   ctx.fill();
   ctx.shadowColor = "transparent";
-
-  const kind = scene.kind || "image";
   const speechElapsedMs = t01 * Math.max(1, durationMs);
   const sceneElapsedMs =
     opts.sceneElapsedMs != null ? opts.sceneElapsedMs : speechElapsedMs;
   const speechMs = opts.speechMs != null ? opts.speechMs : durationMs;
 
   if (kind === "question") {
-    paintQuestion(ctx, scene, card, sceneElapsedMs, speechMs);
+    paintQuestion(ctx, scene, card, sceneElapsedMs, speechMs, theme);
     return canvas;
   }
 
@@ -1303,7 +1338,7 @@ export async function paintCanvasScene(
     ctx.save();
     roundRect(ctx, card.x, card.y, card.w, card.h, r);
     ctx.clip();
-    paintTemplate(ctx, scene, card, t01, speechElapsedMs, durationMs);
+    paintTemplate(ctx, scene, card, t01, speechElapsedMs, durationMs, theme);
     ctx.restore();
     return canvas;
   }

@@ -12,6 +12,7 @@ import {
   questionPostVisualMs,
   questionPreMs,
 } from "./paint-scene.mjs";
+import { resolveTemplateTheme } from "./template-theme.mjs";
 import {
   computeTypingSegments,
   TYPING_SFX_VOLUME,
@@ -883,12 +884,23 @@ function compositeSlideCanvas(createCanvas, fromCanvas, toCanvas, W, H, slideT) 
   return canvas;
 }
 
-async function paintSceneAtElapsed(createCanvas, scene, W, H, sceneElapsed, speechMs, assets, bgLoop) {
+async function paintSceneAtElapsed(
+  createCanvas,
+  scene,
+  W,
+  H,
+  sceneElapsed,
+  speechMs,
+  assets,
+  bgLoop,
+  templateTheme,
+) {
   const speechT01 = Math.min(1, sceneElapsed / Math.max(1, speechMs));
   const bgIdx =
     bgLoop?.imgs?.length > 0
       ? Math.floor(((sceneElapsed / 1000) * (bgLoop.fps || 15)) % bgLoop.imgs.length)
       : 0;
+  const theme = resolveTemplateTheme(scene, templateTheme);
   return paintCanvasScene(
     createCanvas,
     scene,
@@ -900,7 +912,7 @@ async function paintSceneAtElapsed(createCanvas, scene, W, H, sceneElapsed, spee
       bgLoopFrame: bgLoop?.imgs?.[bgIdx] || null,
     },
     speechMs,
-    { sceneElapsedMs: sceneElapsed, speechMs },
+    { sceneElapsedMs: sceneElapsed, speechMs, templateTheme: theme },
   );
 }
 
@@ -917,6 +929,7 @@ async function encodeOverlayFrames({
   bgLoop,
   outSeg,
   quality,
+  templateTheme,
 }) {
   const framesDir = path.join(workDir, `frames-${index}`);
   fs.mkdirSync(framesDir, { recursive: true });
@@ -935,6 +948,7 @@ async function encodeOverlayFrames({
       speechMs,
       assets,
       bgLoop,
+      templateTheme,
     );
     fs.writeFileSync(
       path.join(framesDir, `f-${String(i).padStart(5, "0")}.png`),
@@ -1522,6 +1536,7 @@ export async function encodeExportJob({
       bgLoop,
       outSeg: seg,
       quality,
+      templateTheme: payload.templateTheme,
     });
     segments.push(seg);
   }
