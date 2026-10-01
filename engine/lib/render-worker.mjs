@@ -45,6 +45,7 @@ export async function runRenderJob({ job, store, onProgress }) {
     workDir,
     outPath,
     onProgress,
+    isCancelled: () => store.get(job.id)?.status === "cancelled",
   });
 
   // Keep disk tidy (payload + meta remain)

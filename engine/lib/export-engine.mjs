@@ -359,6 +359,165 @@ export function exportSize(quality) {
     : { w: 1280, h: 720, fps: 30 };
 }
 
+const PREFETCH_AHEAD = 3;
+const PREFETCH_CONCURRENCY = 2;
+
+function fileReady(dest) {
+  try {
+    return Boolean(dest) && fs.existsSync(dest) && fs.statSync(dest).size > 1000;
+  } catch {
+    return false;
+  }
+}
+
+function collectSceneDownloads(scene, index, workDir, studioUrl) {
+  const jobs = [];
+  const add = (url, dest) => {
+    if (!url || !dest) return;
+    if (!/^https?:\/\//i.test(url) && !String(url).startsWith("data:")) return;
+    jobs.push({ url, dest });
+  };
+
+  try {
+    const mediaUrl = resolveAssetUrl(scene?.mediaUrl, studioUrl);
+    if (isVideoScene(scene) && mediaUrl) {
+      add(mediaUrl, path.join(workDir, `src-v-${index}${extFromUrl(mediaUrl, ".mp4")}`));
+    }
+  } catch {
+    /* resolve errors are handled when the scene encodes */
+  }
+
+  const skipFullBackground = shouldSkipFullBackground(scene);
+  try {
+    const still = resolveAssetUrl(
+      skipFullBackground
+        ? null
+        : scene?.backgroundUrl || (scene?.revealCovers?.length ? scene.backgroundUrl : null) || null,
+      studioUrl,
+    );
+    if (still) add(still, path.join(workDir, `still-${index}${extFromUrl(still, ".png")}`));
+  } catch {
+    /* skip */
+  }
+
+  if (!skipFullBackground && scene?.revealCovers?.length && scene.backgroundUrl) {
+    try {
+      const u = resolveAssetUrl(scene.backgroundUrl, studioUrl);
+      if (u) add(u, path.join(workDir, `cover-bg-${index}${extFromUrl(u, ".png")}`));
+    } catch {
+      /* skip */
+    }
+  }
+
+  for (const el of scene?.elements || []) {
+    if (!el?.id || !el.mediaUrl) continue;
+    try {
+      const u = resolveAssetUrl(el.mediaUrl, studioUrl);
+      if (!u) continue;
+      add(u, path.join(workDir, `el-${index}-${el.id}${extFromUrl(u, ".png")}`));
+    } catch {
+      /* skip */
+    }
+  }
+  return jobs;
+}
+
+function sceneDownloadsReady(jobs) {
+  return jobs.every((j) => fileReady(j.dest));
+}
+
+function createAssetPrefetch({ authToken, concurrency = PREFETCH_CONCURRENCY, isCancelled } = {}) {
+  /** @type {Map<string, Promise<string>>} */
+  const inflight = new Map();
+  const queue = [];
+  let active = 0;
+  let stopped = false;
+
+  function cancelled() {
+    return stopped || Boolean(isCancelled?.());
+  }
+
+  function pump() {
+    while (active < concurrency && queue.length) {
+      if (cancelled()) {
+        while (queue.length) {
+          const item = queue.shift();
+          inflight.delete(item.dest);
+          item.resolve(item.dest);
+        }
+        return;
+      }
+      const item = queue.shift();
+      if (fileReady(item.dest)) {
+        inflight.delete(item.dest);
+        item.resolve(item.dest);
+        continue;
+      }
+      active += 1;
+      fetchToFile(item.url, item.dest, authToken)
+        .then((dest) => {
+          inflight.delete(item.dest);
+          item.resolve(dest);
+        })
+        .catch((err) => {
+          inflight.delete(item.dest);
+          item.reject(err);
+        })
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
+    }
+  }
+
+  function enqueue(url, dest) {
+    if (!url || !dest) return Promise.resolve(dest);
+    if (fileReady(dest) || cancelled()) return Promise.resolve(dest);
+    const existing = inflight.get(dest);
+    if (existing) return existing;
+    const p = new Promise((resolve, reject) => {
+      queue.push({ url, dest, resolve, reject });
+    });
+    inflight.set(dest, p);
+    pump();
+    return p;
+  }
+
+  return {
+    enqueue,
+    prefetchAhead(scenes, fromIndex, workDir, studioUrl, ahead = PREFETCH_AHEAD) {
+      if (cancelled()) return;
+      const end = Math.min(scenes.length, Math.max(0, fromIndex) + ahead);
+      for (let i = Math.max(0, fromIndex); i < end; i++) {
+        for (const job of collectSceneDownloads(scenes[i], i, workDir, studioUrl)) {
+          enqueue(job.url, job.dest).catch((e) => {
+            if (!cancelled()) {
+              console.warn("[agent] prefetch", path.basename(job.dest), e.message || e);
+            }
+          });
+        }
+      }
+    },
+    async waitForScene(scene, index, workDir, studioUrl) {
+      const jobs = collectSceneDownloads(scene, index, workDir, studioUrl);
+      if (!jobs.length) return;
+      await Promise.all(
+        jobs.map((job) =>
+          enqueue(job.url, job.dest).catch((e) => {
+            if (!cancelled()) {
+              console.warn("[agent] prefetch wait", path.basename(job.dest), e.message || e);
+            }
+          }),
+        ),
+      );
+    },
+    stop() {
+      stopped = true;
+      queue.length = 0;
+    },
+  };
+}
+
 function extFromUrl(url, fallback) {
   try {
     const u = /^https?:\/\//i.test(url) ? new URL(url) : new URL(url, "http://local");
@@ -611,6 +770,7 @@ function resolveAssetUrl(url, studioUrl) {
 
 async function fetchToFile(url, dest, authToken, { retries = 3 } = {}) {
   authToken = authToken || process.env.RENDER_API_KEY || "";
+  if (fileReady(dest)) return dest;
   if (String(url).startsWith("data:")) {
     const m = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(String(url));
     if (!m) throw new Error("Invalid data URL");
@@ -1301,6 +1461,7 @@ export async function encodeExportJob({
   workDir,
   outPath,
   onProgress,
+  isCancelled,
 }) {
   // Local-only encode on this Mac — never starts a Studio SERVER job.
   const authToken = job.authToken || process.env.RENDER_API_KEY || null;
@@ -1343,12 +1504,36 @@ export async function encodeExportJob({
     }
   }
 
-  onProgress("baking orange bg loop…", 0.04);
-  const bgLoop = await bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps);
+  const prefetch = createAssetPrefetch({
+    authToken,
+    isCancelled: () => Boolean(isCancelled?.() || job.status === "cancelled"),
+  });
+  const encodeStartedAt = Date.now();
+  let downloadWaitMs = 0;
+  let prefetchHits = 0;
+  prefetch.prefetchAhead(scenes, 0, workDir, studioUrl);
+  const masterRaw =
+    payload.masterAudioUrl ||
+    scenes.find((s) => s.masterAudioUrl)?.masterAudioUrl ||
+    (scenes.length === 1 ? scenes[0]?.audioUrl : null);
+  try {
+    const masterPrefetch = resolveAssetUrl(masterRaw, studioUrl);
+    if (masterPrefetch && (/^https?:\/\//i.test(masterPrefetch) || masterPrefetch.startsWith("data:"))) {
+      prefetch
+        .enqueue(masterPrefetch, path.join(workDir, `audio${extFromUrl(masterPrefetch, ".mp3")}`))
+        .catch((e) => console.warn("[agent] prefetch audio", e.message || e));
+    }
+  } catch {
+    /* encode path still fetches master audio later */
+  }
 
   const segments = [];
   const transitionsMs = [];
   const durs = [];
+
+  try {
+  onProgress("baking orange bg loop…", 0.04);
+  const bgLoop = await bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps);
 
   for (let i = 0; i < scenes.length; i++) {
     const scene = scenes[i];
@@ -1356,6 +1541,23 @@ export async function encodeExportJob({
     const durSec = frames / fps;
     durs.push(durSec);
     transitionsMs.push(i < scenes.length - 1 ? transitionAfterMs(scene) : 0);
+    prefetch.prefetchAhead(scenes, i + 1, workDir, studioUrl);
+    const pending = collectSceneDownloads(scene, i, workDir, studioUrl);
+    const waitStartedAt = Date.now();
+    if (pending.length && !sceneDownloadsReady(pending)) {
+      onProgress(
+        `downloading scene ${i + 1}/${scenes.length}…`,
+        0.05 + 0.7 * (i / scenes.length),
+      );
+      await prefetch.waitForScene(scene, i, workDir, studioUrl);
+    } else if (pending.length) {
+      prefetchHits += 1;
+    }
+    const waitedMs = Date.now() - waitStartedAt;
+    downloadWaitMs += waitedMs;
+    console.log(
+      `[agent] scene ${i + 1}/${scenes.length} asset-wait ${waitedMs}ms files=${pending.length} hit=${pending.length > 0 && waitedMs < 50}`,
+    );
     onProgress(
       `encoding scene ${i + 1}/${scenes.length}…`,
       0.05 + 0.7 * ((i + 0.5) / scenes.length),
@@ -1540,6 +1742,9 @@ export async function encodeExportJob({
     });
     segments.push(seg);
   }
+  } finally {
+    prefetch.stop();
+  }
 
   onProgress("slide transitions…", 0.78);
   // Snap every segment to the master-clock frame count (no 80ms slop).
@@ -1599,10 +1804,6 @@ export async function encodeExportJob({
   const targetSec = videoFrames / fps;
   const videoForMux = silentVideo;
 
-  const masterRaw =
-    payload.masterAudioUrl ||
-    scenes.find((s) => s.masterAudioUrl)?.masterAudioUrl ||
-    (scenes.length === 1 ? scenes[0]?.audioUrl : null);
   const master = resolveAssetUrl(masterRaw, studioUrl);
 
   if (master && (/^https?:\/\//i.test(master) || master.startsWith("data:"))) {
@@ -1659,4 +1860,7 @@ export async function encodeExportJob({
   if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 1000) {
     throw new Error("Export produced an empty or missing MP4");
   }
+  console.log(
+    `[agent] encode finished in ${((Date.now() - encodeStartedAt) / 1000).toFixed(1)}s download-wait ${(downloadWaitMs / 1000).toFixed(1)}s prefetch-hits ${prefetchHits}/${scenes.length}`,
+  );
 }
