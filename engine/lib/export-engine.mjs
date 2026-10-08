@@ -181,9 +181,14 @@ function shouldDetectMatteCrop(_scene) {
   return false;
 }
 
-/** All recordings/clips use object-contain like intro bumpers (no stretch-fill zoom). */
-function shouldStretchFillVideo(_scene) {
-  return false;
+/** Intro/outro bumpers stay letterboxed. Other recordings match Studio compose (`cameraFit: fill`). */
+function shouldStretchFillVideo(scene) {
+  return !isBumperScene(scene);
+}
+
+/** Expand anamorphic pixels so ffmpeg uses the same display size as the browser. */
+function squarePixelVf() {
+  return "scale=iw*sar:ih,setsar=1";
 }
 
 /** Pick the most frequent stable crop from cropdetect stderr lines. */
@@ -280,13 +285,11 @@ async function detectRecordingContentCrop(ffmpeg, file, ssSec, workDir) {
 
 function buildRecordingScaleVf(innerW, innerH, fps, useContain, crop) {
   const cropVf = crop ? `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},` : "";
+  const square = `${cropVf}${squarePixelVf()}`;
   if (useContain) {
-    if (crop) {
-      return `${cropVf}scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease,format=rgba,pad=${innerW}:${innerH}:(ow-iw)/2:(oh-ih)/2:black@0,setsar=1,fps=${fps}`;
-    }
-    return containVf(innerW, innerH, fps);
+    return `${square},scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease,format=rgba,pad=${innerW}:${innerH}:(ow-iw)/2:(oh-ih)/2:black@0,setsar=1,fps=${fps}`;
   }
-  return `${cropVf}scale=${innerW}:${innerH},setsar=1,fps=${fps}`;
+  return `${square},scale=${innerW}:${innerH},setsar=1,fps=${fps}`;
 }
 
 function msToFrame(ms, fps) {
@@ -589,12 +592,12 @@ function isVideoScene(scene) {
 }
 
 function coverVf(w, h, fps) {
-  return `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${fps}`;
+  return `${squarePixelVf()},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${fps}`;
 }
 
 function containVf(w, h, fps) {
   // Transparent pad so orange bg shows in letterbox (not white).
-  return `scale=${w}:${h}:force_original_aspect_ratio=decrease,format=rgba,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black@0,setsar=1,fps=${fps}`;
+  return `${squarePixelVf()},scale=${w}:${h}:force_original_aspect_ratio=decrease,format=rgba,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black@0,setsar=1,fps=${fps}`;
 }
 
 function isCodeTypingScene(scene) {
@@ -1593,8 +1596,8 @@ export async function encodeExportJob({
       const innerH = Math.round(card.h);
       const ox = Math.round(card.x);
       const oy = Math.round(card.y);
-      // All video scenes: object-contain in the card (intro bumper parity — no auto crop / zoom).
-      const useContain = true;
+      // Studio compose uses cameraFit "fill" for recordings; bumpers stay contain.
+      const useContain = !shouldStretchFillVideo(scene);
       const recRaw = path.join(workDir, `rec-raw-${i}.mp4`);
       const trimStartMs = Math.max(0, Number(scene.recordingTrimStartMs) || 0);
       const trimEndMs = Number(scene.recordingTrimEndMs) || 0;

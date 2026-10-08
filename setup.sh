@@ -55,6 +55,6 @@ echo "  2. Install background services (recommended):"
 echo "       bash scripts/install-services.sh"
 echo "     Or run once in a terminal:"
 echo "       npm start"
-echo "  3. Open http://127.0.0.1:3849 — verify key + machine name, then Render"
+echo "  3. Open http://127.0.0.1:3849 — verify key + unique machine name (auto-claim starts HD)"
 echo
 echo "Copy this entire 'Enfeca Render' folder to another Mac and run setup.sh again."

@@ -30,6 +30,8 @@ const WATCHING = new Set();
 const CANCELLED = new Set();
 /** @type {Set<string>} */
 const AUTO_CLAIMING = new Set();
+const CLAIM_IDLE_MS = 12_000;
+const PROGRESS_HEARTBEAT_MS = 25_000;
 
 function isCancelled(bundleId) {
   return CANCELLED.has(bundleId);
@@ -276,11 +278,9 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`Studio                   ${studioUrl() || "(set on the page)"}`);
   console.log(`HD workers               ${agentPorts().join(", ")}  (8080 / 3850 unused)`);
   console.log(`MP4s                     ${OUT_DIR}`);
+  console.log(`Machine                  ${renderMachine()} · auto-claim ${autoClaimEnabled() ? "on" : "off"}`);
   if (!renderKey()) console.log("Paste RENDER_API_KEY on the page (Lovable Secrets).");
-  if (autoClaimEnabled()) {
-    console.log(`Auto-claim enabled · machine ${renderMachine()}`);
-    runAutoClaimLoop().catch((e) => console.error("[auto-claim]", e));
-  }
+  runAutoClaimLoop().catch((e) => console.error("[auto-claim]", e));
 });
 
 async function startCloudRender(id, opts = {}) {
@@ -297,24 +297,6 @@ async function startCloudRender(id, opts = {}) {
 
   let bundle = opts.job || null;
   let payload = opts.payload || null;
-  if (!opts.claimed) {
-    try {
-      const claimed = await claimNextRenderJob(renderMachine());
-      if (claimed?.id && claimed.id !== id) {
-        throw new Error(
-          `Another job is ahead in the queue (${claimed.title || claimed.filename || claimed.id}). Render that one first.`,
-        );
-      }
-      if (claimed?.id === id) {
-        bundle = claimed;
-        payload = extractPayload(claimed);
-        opts.claimed = true;
-      }
-    } catch (e) {
-      if (String(e.message || e).includes("ahead in the queue")) throw e;
-      console.warn("[hd-render] claim skipped:", e.message || e);
-    }
-  }
   if (!payload) {
     const fromQueue = await findRenderJob(id);
     if (fromQueue) {
@@ -356,8 +338,11 @@ async function startCloudRender(id, opts = {}) {
     JOBS.delete(id);
     return;
   }
-  if (!opts.claimed) {
-    await reportRenderProgress(id, 0, "queueing HD agent…").catch(() => {});
+  const queued = await reportRenderProgress(id, 0, "queueing HD agent…").catch(() => ({ abort: false }));
+  if (queued?.abort) {
+    CANCELLED.add(id);
+    JOBS.delete(id);
+    return;
   }
 
   const existing =
@@ -438,7 +423,11 @@ async function finishAgentJob(id, port, agentJobId, filename) {
     progress: 0.96,
     outPath: dest,
   });
-  await reportRenderProgress(id, 0.96, "uploading MP4…").catch(() => {});
+  const uploading = await reportRenderProgress(id, 0.96, "uploading MP4…").catch(() => ({ abort: false }));
+  if (uploading?.abort) {
+    CANCELLED.add(id);
+    return { status: "cancelled" };
+  }
   await uploadRenderOutput(id, dest, filename);
 
   JOBS.set(id, {
@@ -973,6 +962,7 @@ async function postAgentJob(port, body) {
 async function waitForAgentJob(port, agentJobId, renderJobId) {
   const deadline = Date.now() + 4 * 60 * 60 * 1000;
   let last = "";
+  let lastHeartbeatAt = 0;
   while (Date.now() < deadline) {
     if (isCancelled(renderJobId)) {
       return { status: "cancelled" };
@@ -1008,19 +998,24 @@ async function waitForAgentJob(port, agentJobId, renderJobId) {
           error: j.error || null,
         });
       }
-      if (renderJobId && j.status === "running") {
-        try {
-          const { abort } = await reportRenderProgress(
-            renderJobId,
-            j.progress || 0,
-            j.stage || j.status,
-          );
-          if (abort) {
-            await removeAgentJob(port, agentJobId);
-            return { status: "cancelled" };
+      if (renderJobId && (j.status === "running" || j.status === "queued")) {
+        const now = Date.now();
+        if (now - lastHeartbeatAt >= PROGRESS_HEARTBEAT_MS) {
+          lastHeartbeatAt = now;
+          try {
+            const { abort } = await reportRenderProgress(
+              renderJobId,
+              j.progress || 0,
+              j.stage || j.status,
+            );
+            if (abort) {
+              CANCELLED.add(renderJobId);
+              await removeAgentJob(port, agentJobId);
+              return { status: "cancelled" };
+            }
+          } catch (e) {
+            console.warn("[hd-render] progress report failed:", e.message);
           }
-        } catch (e) {
-          console.warn("[hd-render] progress report failed:", e.message);
         }
       }
       if (j.status === "done" || j.status === "error" || j.status === "cancelled") {
@@ -1072,6 +1067,7 @@ async function reportRenderProgress(id, progress, stage) {
     body: JSON.stringify({
       progress: Math.max(0, Math.min(1, Number(progress) || 0)),
       stage: String(stage || "").slice(0, 200),
+      machine: renderMachine(),
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -1147,22 +1143,25 @@ async function markBundle(id, status, error) {
   }
 }
 
+function isLocallyBusy() {
+  for (const job of JOBS.values()) {
+    if (job?.status === "running") return true;
+  }
+  return agentPorts().some((port) => agentBusyOnDisk(port));
+}
+
 async function runAutoClaimLoop() {
-  const machine = renderMachine();
-  while (autoClaimEnabled()) {
-    if (!renderKey() || !studioUrl()) {
-      await sleep(10_000);
+  while (true) {
+    if (!autoClaimEnabled() || !renderKey() || !studioUrl() || isLocallyBusy()) {
+      await sleep(CLAIM_IDLE_MS);
       continue;
     }
-    const idle = agentPorts().every((port) => !agentBusyOnDisk(port));
-    if (!idle) {
-      await sleep(5000);
-      continue;
-    }
+    const machine = renderMachine();
+    let claimed = null;
     try {
-      const claimed = await claimNextRenderJob(machine);
-      if (!claimed?.id || AUTO_CLAIMING.has(claimed.id)) {
-        await sleep(8000);
+      claimed = await claimNextRenderJob(machine);
+      if (!claimed?.id || AUTO_CLAIMING.has(claimed.id) || JOBS.get(claimed.id)?.status === "running") {
+        await sleep(CLAIM_IDLE_MS);
         continue;
       }
       AUTO_CLAIMING.add(claimed.id);
@@ -1174,13 +1173,20 @@ async function runAutoClaimLoop() {
       });
     } catch (e) {
       console.warn("[auto-claim]", e.message);
-      await sleep(10_000);
-    } finally {
-      for (const id of AUTO_CLAIMING) {
-        if (!JOBS.has(id) || JOBS.get(id)?.status !== "running") AUTO_CLAIMING.delete(id);
+      if (claimed?.id && !isCancelled(claimed.id)) {
+        const job = JOBS.get(claimed.id) ?? {};
+        JOBS.set(claimed.id, {
+          ...job,
+          status: "error",
+          error: e.message || String(e),
+          stage: "error",
+        });
+        failRenderJob(claimed.id, e.message || String(e)).catch(() => {});
       }
+      await sleep(CLAIM_IDLE_MS);
+    } finally {
+      if (claimed?.id) AUTO_CLAIMING.delete(claimed.id);
     }
-    await sleep(2000);
   }
 }
 
@@ -1376,7 +1382,8 @@ function renderMachine() {
   return (process.env.RENDER_MACHINE || `mac-${os.hostname()}`).trim();
 }
 function autoClaimEnabled() {
-  return process.env.AUTO_CLAIM === "1";
+  const v = String(process.env.AUTO_CLAIM ?? "1").trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "off";
 }
 function findResumableAgentJob(filename) {
   const target = safeName(filename);

@@ -35,7 +35,8 @@ bash setup.sh
 
 ```bash
 RENDER_API_KEY=your_key_from_lovable_secrets
-RENDER_MACHINE=mac-2
+RENDER_MACHINE=mac-d-macbook
+AUTO_CLAIM=1
 ```
 
 4. Install background services (starts on login):
@@ -44,7 +45,7 @@ RENDER_MACHINE=mac-2
 bash scripts/install-services.sh
 ```
 
-5. Open **http://127.0.0.1:3849** — confirm connection, enable **Auto-claim** if you want FIFO pull, click **Render** or **Claim next**.
+5. Open **http://127.0.0.1:3849** — confirm the API key and a **unique** `RENDER_MACHINE` (`mac-d-macbook` on this Mac, `mac-enfec’s-macbook-pro` on the other). Auto-claim is on: the Mac polls Studio every 12s, renders one claimed job, uploads, then asks again. No need to click Render.
 
 That's it. No separate Explainer Render Agent install, no manual port wiring.
 
@@ -66,8 +67,8 @@ All requests use `Authorization: Bearer <RENDER_API_KEY>`.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/api/public/render/jobs` | Queue view |
-| `POST` | `/api/public/render/claim` | `{"machine":"mac-1"}` — claim oldest job + payload |
-| `POST` | `/api/public/render/:id/progress` | `{"progress":0.42,"stage":"encoding"}` |
+| `POST` | `/api/public/render/claim` | `{"machine":"mac-d-macbook"}` — claim next job + payload |
+| `POST` | `/api/public/render/:id/progress` | `{"progress":0.42,"stage":"encoding","machine":"mac-d-macbook"}` every 20–30s; stop if `abort: true` |
 | `PUT` | `/api/public/render/:id/output` | Raw MP4 body |
 | `POST` | `/api/public/render/:id/fail` | `{"error":"..."}` |
 
