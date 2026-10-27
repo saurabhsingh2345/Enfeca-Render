@@ -97,6 +97,23 @@ function run(cmd, args, onLog) {
   });
 }
 
+/** Per-job wall-clock totals by step, logged when the encode finishes. */
+let timings = new Map();
+
+function addTime(tag, ms) {
+  timings.set(tag, (timings.get(tag) || 0) + ms);
+}
+
+/** run() that also adds its wall time to the job's timings under `tag`. */
+async function timedRun(tag, cmd, args) {
+  const t0 = performance.now();
+  try {
+    await run(cmd, args);
+  } finally {
+    addTime(tag, performance.now() - t0);
+  }
+}
+
 /** Probe media duration in seconds (ffmpeg stderr). */
 async function probeDurationSec(ffmpeg, file) {
   return new Promise((resolve) => {
@@ -310,7 +327,7 @@ function sceneFrameCount(scene, fps) {
  */
 async function fitVideoToFrames(ffmpeg, inPath, outPath, frames, fps, quality) {
   const n = Math.max(1, Math.round(frames));
-  await run(ffmpeg, [
+  await timedRun("ffmpeg:fit", ffmpeg, [
     "-y",
     "-i",
     inPath,
@@ -690,7 +707,7 @@ async function bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps) {
   }
 
   if (bgFile && fs.existsSync(bgFile)) {
-    await run(ffmpeg, [
+    await timedRun("ffmpeg:bg-loop-bake", ffmpeg, [
       "-y",
       "-i",
       bgFile,
@@ -985,7 +1002,7 @@ async function makeBgSegment(ffmpeg, bgFile, W, H, fps, frames, outPath, quality
   const n = Math.max(1, Math.round(frames));
   const durSec = n / fps;
   if (bgFile && fs.existsSync(bgFile)) {
-    await run(ffmpeg, [
+    await timedRun("ffmpeg:bg-segment", ffmpeg, [
       "-y",
       "-stream_loop",
       "-1",
@@ -1012,7 +1029,7 @@ async function makeBgSegment(ffmpeg, bgFile, W, H, fps, frames, outPath, quality
     ]);
     return;
   }
-  await run(ffmpeg, [
+  await timedRun("ffmpeg:bg-segment", ffmpeg, [
     "-y",
     "-f",
     "lavfi",
@@ -1102,6 +1119,7 @@ async function encodeOverlayFrames({
   const n = Math.max(2, Math.round(durSec * sampleFps));
   for (let i = 0; i < n; i++) {
     const sceneElapsed = (i / sampleFps) * 1000;
+    const tPaint = performance.now();
     const canvas = await paintSceneAtElapsed(
       createCanvas,
       scene,
@@ -1113,13 +1131,20 @@ async function encodeOverlayFrames({
       bgLoop,
       templateTheme,
     );
+    const tPng = performance.now();
+    const pngBytes = canvas.toBuffer("image/png");
+    const tWrite = performance.now();
     fs.writeFileSync(
       path.join(framesDir, `f-${String(i).padStart(5, "0")}.png`),
-      canvas.toBuffer("image/png"),
+      pngBytes,
     );
+    addTime("frames:paint", tPng - tPaint);
+    addTime("frames:png-encode", tWrite - tPng);
+    addTime("frames:png-write", performance.now() - tWrite);
+    addTime("frames:count", 1);
   }
 
-  await run(ffmpeg, [
+  await timedRun("ffmpeg:overlay-encode", ffmpeg, [
     "-y",
     "-framerate",
     String(sampleFps),
@@ -1262,7 +1287,7 @@ async function mixOverlayAudio({
   filters.push(
     `${mixLabels.join("")}amix=inputs=${mixLabels.length}:duration=first:dropout_transition=0:normalize=0[aout]`,
   );
-  await run(ffmpeg, [
+  await timedRun("ffmpeg:audio-mix", ffmpeg, [
     "-y",
     ...inputs,
     "-filter_complex",
@@ -1288,7 +1313,7 @@ async function extractFramePng(ffmpeg, videoPath, destPng, { fromEnd = false } =
   const args = fromEnd
     ? ["-y", "-sseof", "-0.04", "-i", videoPath, "-frames:v", "1", "-q:v", "2", destPng]
     : ["-y", "-i", videoPath, "-frames:v", "1", "-q:v", "2", destPng];
-  await run(ffmpeg, args);
+  await timedRun("ffmpeg:slide-extract-frame", ffmpeg, args);
 }
 
 /**
@@ -1336,7 +1361,7 @@ async function applySegmentSlide({
   }
 
   const slideMp4 = path.join(workDir, `slide-${index}.mp4`);
-  await run(ffmpeg, [
+  await timedRun("ffmpeg:slide-encode", ffmpeg, [
     "-y",
     "-framerate",
     String(fps),
@@ -1358,7 +1383,7 @@ async function applySegmentSlide({
 
   const trimMp4 = path.join(workDir, `trim-${index}.mp4`);
   // Keep the hold portion (speech + 2s wait); only the last 1s becomes the slide.
-  await run(ffmpeg, [
+  await timedRun("ffmpeg:slide-trim", ffmpeg, [
     "-y",
     "-i",
     fromSeg,
@@ -1390,7 +1415,7 @@ async function applySegmentSlide({
       "\n",
     ),
   );
-  await run(ffmpeg, [
+  await timedRun("ffmpeg:slide-concat", ffmpeg, [
     "-y",
     "-f",
     "concat",
@@ -1429,7 +1454,7 @@ async function concatHard(ffmpeg, segments, outPath, fps, totalFrames) {
     listFile,
     segments.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"),
   );
-  await run(ffmpeg, [
+  await timedRun("ffmpeg:concat", ffmpeg, [
     "-y",
     "-f",
     "concat",
@@ -1477,6 +1502,7 @@ export async function encodeExportJob({
   if (!scenes.length) throw new Error("Export payload has no scenes");
 
   fs.mkdirSync(workDir, { recursive: true });
+  timings = new Map();
 
   let bgFile = null;
   try {
@@ -1627,7 +1653,7 @@ export async function encodeExportJob({
         contentCrop,
       );
       // Zero QuickTime start_time so recording video lines up with extracted audio.
-      await run(ffmpeg, [
+      await timedRun("ffmpeg:rec-raw", ffmpeg, [
         "-y",
         "-fflags",
         "+genpts",
@@ -1654,7 +1680,7 @@ export async function encodeExportJob({
       const rec = path.join(workDir, `rec-${i}.mp4`);
       await fitVideoToFrames(ffmpeg, recRaw, rec, frames, fps, quality);
       const overlaid = path.join(workDir, `rec-over-${i}.mp4`);
-      await run(ffmpeg, [
+      await timedRun("ffmpeg:rec-overlay", ffmpeg, [
         "-y",
         "-i",
         bgSeg,
@@ -1831,7 +1857,7 @@ export async function encodeExportJob({
     }
 
     // Video length = sum(scene windows). Lock mux to that so A/V stay 1:1.
-    await run(ffmpeg, [
+    await timedRun("ffmpeg:mux", ffmpeg, [
       "-y",
       "-i",
       videoForMux,
@@ -1863,6 +1889,12 @@ export async function encodeExportJob({
   if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 1000) {
     throw new Error("Export produced an empty or missing MP4");
   }
+  const stepSummary = Object.fromEntries(
+    [...timings.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => [k, k === "frames:count" ? v : Number((v / 1000).toFixed(1))]),
+  );
+  console.log(`[agent] step seconds ${JSON.stringify(stepSummary)}`);
   console.log(
     `[agent] encode finished in ${((Date.now() - encodeStartedAt) / 1000).toFixed(1)}s download-wait ${(downloadWaitMs / 1000).toFixed(1)}s prefetch-hits ${prefetchHits}/${scenes.length}`,
   );
