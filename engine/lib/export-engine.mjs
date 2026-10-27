@@ -1733,19 +1733,26 @@ export async function encodeExportJob({
       continue;
     }
 
-    const bgSeg = path.join(workDir, `bg-${i}.mp4`);
-    if (!fs.existsSync(bgSeg) || fs.statSync(bgSeg).size < 1000) {
-      await makeBgSegment(ffmpeg, bgFile, W, H, fps, frames, bgSeg, quality);
-    }
-
     let mediaUrl = null;
     try {
       mediaUrl = resolveAssetUrl(scene.mediaUrl, studioUrl);
     } catch (e) {
       if (isVideoScene(scene)) throw e;
     }
+    const isRecordingOverlay =
+      isVideoScene(scene) && Boolean(mediaUrl) && /^https?:\/\//i.test(mediaUrl);
 
-    if (isVideoScene(scene) && mediaUrl && /^https?:\/\//i.test(mediaUrl)) {
+    // Only recording scenes composite over this clip. Image/question/code scenes
+    // paint their own background, so under ENGINE=fast the encode is skipped.
+    const bgSeg = path.join(workDir, `bg-${i}.mp4`);
+    if (
+      (!FAST_ENGINE || isRecordingOverlay) &&
+      (!fs.existsSync(bgSeg) || fs.statSync(bgSeg).size < 1000)
+    ) {
+      await makeBgSegment(ffmpeg, bgFile, W, H, fps, frames, bgSeg, quality);
+    }
+
+    if (isRecordingOverlay) {
       const src = path.join(workDir, `src-v-${i}${extFromUrl(mediaUrl, ".mp4")}`);
       await fetchToFile(mediaUrl, src, authToken);
       const card = cardRect(W, H);
