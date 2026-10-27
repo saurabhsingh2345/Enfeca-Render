@@ -20,6 +20,7 @@ const engineDir = path.join(here, "..", "engine");
 const workDir = path.resolve(process.argv[2] ?? "");
 const label = process.argv[3] ?? "run";
 const customOutro = process.argv.includes("--custom-outro");
+const brokenRecording = process.argv.includes("--broken-recording");
 if (!process.argv[2]) {
   console.error("usage: node bench/run.mjs <workDir> <label> [--custom-outro]");
   process.exit(1);
@@ -29,7 +30,7 @@ const ASSET_PORT = 8765;
 const AGENT_PORT = 3863;
 
 const fixtureDir = path.join(workDir, customOutro ? "fixture-custom-outro" : "fixture");
-const { payload, totalMs } = buildFixture(fixtureDir, { customOutro });
+const { payload, totalMs } = buildFixture(fixtureDir, { customOutro, brokenRecording });
 
 const assetServer = http.createServer((req, res) => {
   const rel = decodeURIComponent(new URL(req.url, "http://x").pathname);

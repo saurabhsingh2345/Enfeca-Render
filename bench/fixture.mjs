@@ -3,6 +3,9 @@
  *
  *   node bench/fixture.mjs <outDir> [--custom-outro]
  *
+ * `--broken-recording` points the screen-recording scene at a file that does not
+ * exist, to exercise the failure path.
+ *
  * Writes the media files and payload.json into <outDir>. `--custom-outro`
  * swaps the brand outro for a 4:3 clip with a course-style filename, which is
  * how a course-level outro override reaches the worker.
@@ -33,7 +36,7 @@ function png(file, w, h, paint) {
   fs.writeFileSync(file, c.toBuffer("image/png"));
 }
 
-export function buildFixture(outDir, { customOutro = false } = {}) {
+export function buildFixture(outDir, { customOutro = false, brokenRecording = false } = {}) {
   fs.mkdirSync(path.join(outDir, "files"), { recursive: true });
   const files = path.join(outDir, "files");
 
@@ -93,7 +96,7 @@ export function buildFixture(outDir, { customOutro = false } = {}) {
     [{ kind: "recording", subtitle: "Intro", mediaUrl: "/common-intro.mp4", recordingUseEmbeddedAudio: true, recordingTrimStartMs: 0, recordingTrimEndMs: 12217 }, 12217],
     [{ kind: "image", elements: [el(0, 0.25, 0.5, 0.05, "pop"), el(1, 0.5, 0.5, 0.35, "slide-up"), el(2, 0.75, 0.5, 0.65, "slide-left")] }, 8000],
     [{ kind: "image", backgroundUrl: "/files/still.png", bgAspect: 1.5 }, 8000],
-    [{ kind: "recording", mediaUrl: "/files/rec1.mp4", recordingTrimStartMs: 0, recordingTrimEndMs: 10000 }, 10000],
+    [{ kind: "recording", mediaUrl: brokenRecording ? "/files/missing-recording.mp4" : "/files/rec1.mp4", recordingTrimStartMs: 0, recordingTrimEndMs: 10000 }, 10000],
     [{ kind: "question", questionKind: "mcq", questionText: "Which option is the right one?", questionOptions: ["First", "Second", "Third", "Fourth"] }, 6000],
     [{ kind: "code", codeLanguage: "ts", code: "const total = items.reduce((a, b) => a + b, 0);\nconsole.log(total);", codeOutput: "42" }, 8000],
     [{ kind: "image", elements: [el(1, 0.3, 0.45, 0.1, "pop"), el(2, 0.7, 0.55, 0.5, "slide-right")] }, 6000],
@@ -123,7 +126,7 @@ export function buildFixture(outDir, { customOutro = false } = {}) {
   }
 
   const payload = {
-    filename: `bench${customOutro ? "-custom-outro" : ""}-1080p.mp4`,
+    filename: `bench${customOutro ? "-custom-outro" : ""}${brokenRecording ? "-broken" : ""}-1080p.mp4`,
     quality: "hd",
     masterAudioUrl: "/files/master.m4a",
     scenes,
@@ -142,6 +145,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   const { totalMs } = buildFixture(path.resolve(outDir), {
     customOutro: process.argv.includes("--custom-outro"),
+    brokenRecording: process.argv.includes("--broken-recording"),
   });
   console.log(`fixture ready in ${outDir} (${(totalMs / 1000).toFixed(1)}s of video)`);
 }
