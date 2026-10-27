@@ -22,6 +22,10 @@ import { randomUUID } from "node:crypto";
  */
 
 export function createJobStore(rootDir) {
+  // ffmpeg's concat list resolves each entry relative to the list file, so a
+  // relative data folder (the README starts workers with ./worker-3853) doubled
+  // the path and failed every multi-scene render at the final join.
+  rootDir = path.resolve(rootDir);
   const jobsDir = path.join(rootDir, "data", "jobs");
   const outDir = path.join(rootDir, "data", "out");
   fs.mkdirSync(jobsDir, { recursive: true });
