@@ -36,7 +36,7 @@ function png(file, w, h, paint) {
   fs.writeFileSync(file, c.toBuffer("image/png"));
 }
 
-export function buildFixture(outDir, { customOutro = false, brokenRecording = false, l5eOutro = false } = {}) {
+export function buildFixture(outDir, { customOutro = false, brokenRecording = false, l5eOutro = false, missingElement = false } = {}) {
   fs.mkdirSync(path.join(outDir, "files"), { recursive: true });
   const files = path.join(outDir, "files");
 
@@ -90,7 +90,7 @@ export function buildFixture(outDir, { customOutro = false, brokenRecording = fa
 
   const el = (i, x, y, appearAt, anim) => ({
     id: `el${i}`,
-    mediaUrl: `/files/el${i % 3}.png`,
+    mediaUrl: missingElement && i === 0 ? "/files/gone.png" : `/files/el${i % 3}.png`,
     x,
     y,
     w: 0.28,
@@ -154,6 +154,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     customOutro: process.argv.includes("--custom-outro"),
     brokenRecording: process.argv.includes("--broken-recording"),
     l5eOutro: process.argv.includes("--l5e-outro"),
+    missingElement: process.argv.includes("--missing-element"),
   });
   console.log(`fixture ready in ${outDir} (${(totalMs / 1000).toFixed(1)}s of video)`);
 }

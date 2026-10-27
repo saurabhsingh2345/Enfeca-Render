@@ -21,6 +21,7 @@ const workDir = path.resolve(process.argv[2] ?? "");
 const label = process.argv[3] ?? "run";
 const customOutro = process.argv.includes("--custom-outro");
 const brokenRecording = process.argv.includes("--broken-recording");
+const missingElement = process.argv.includes("--missing-element");
 const relativeRoot = process.argv.includes("--relative-root");
 const l5eOutro = process.argv.includes("--l5e-outro");
 // --no-fallback leaves the fallback host unset, to reproduce the failure.
@@ -30,11 +31,11 @@ if (!process.argv[2]) {
   process.exit(1);
 }
 
-const ASSET_PORT = 8765;
+const ASSET_PORT = Number(process.env.BENCH_ASSET_PORT ?? 8765);
 const AGENT_PORT = 3863;
 
 const fixtureDir = path.join(workDir, customOutro ? "fixture-custom-outro" : l5eOutro ? "fixture-l5e" : "fixture");
-const { payload, totalMs } = buildFixture(fixtureDir, { customOutro, brokenRecording, l5eOutro });
+const { payload, totalMs } = buildFixture(fixtureDir, { customOutro, brokenRecording, l5eOutro, missingElement });
 
 const makeAssetServer = (hideL5e) => http.createServer((req, res) => {
   const rel = decodeURIComponent(new URL(req.url, "http://x").pathname);
@@ -53,7 +54,7 @@ const makeAssetServer = (hideL5e) => http.createServer((req, res) => {
 });
 const assetServer = makeAssetServer(l5eOutro);
 await new Promise((r) => assetServer.listen(ASSET_PORT, "127.0.0.1", r));
-const FALLBACK_PORT = 8766;
+const FALLBACK_PORT = Number(process.env.BENCH_FALLBACK_PORT ?? 8766);
 const fallbackServer = makeAssetServer(false);
 await new Promise((r) => fallbackServer.listen(FALLBACK_PORT, "127.0.0.1", r));
 

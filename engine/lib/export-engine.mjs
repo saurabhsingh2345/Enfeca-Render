@@ -2035,6 +2035,7 @@ export async function encodeExportJob({
         console.warn("[agent] cover bg", e);
       }
     }
+    const missingElements = [];
     for (const el of scene.elements || []) {
       if (!el?.id || !el.mediaUrl) continue;
       try {
@@ -2046,7 +2047,15 @@ export async function encodeExportJob({
         else assets.elementImgs.set(el.id, await loadImage(p));
       } catch (e) {
         console.warn("[agent] element skip", el.id, e);
+        missingElements.push(el.id);
       }
+    }
+    // The default engine drops a missing picture and carries on, which can ship a
+    // blank video that looks finished. The fast engine refuses instead.
+    if (FAST_ENGINE && missingElements.length) {
+      throw new Error(
+        `Scene ${i + 1}: ${missingElements.length} of ${(scene.elements || []).length} images are missing from Studio storage, so this video would render blank. Re-upload or re-generate the images for this part, then render again.`,
+      );
     }
 
     if (FAST_ENGINE) {
