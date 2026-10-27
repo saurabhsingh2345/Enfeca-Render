@@ -21,6 +21,7 @@ const workDir = path.resolve(process.argv[2] ?? "");
 const label = process.argv[3] ?? "run";
 const customOutro = process.argv.includes("--custom-outro");
 const brokenRecording = process.argv.includes("--broken-recording");
+const relativeRoot = process.argv.includes("--relative-root");
 if (!process.argv[2]) {
   console.error("usage: node bench/run.mjs <workDir> <label> [--custom-outro]");
   process.exit(1);
@@ -53,7 +54,9 @@ const env = {
   ...process.env,
   PORT: String(AGENT_PORT),
   AGENT_ISOLATED: "1",
-  AGENT_DATA_ROOT: agentData,
+  // --relative-root hands the worker a relative data folder (as `./worker-3853`
+  // in the README), which is what once broke the final concat.
+  AGENT_DATA_ROOT: relativeRoot ? path.relative(engineDir, agentData) : agentData,
   RENDER_API_KEY: "",
 };
 const agent = spawn("node", ["server.mjs"], { cwd: engineDir, env, stdio: ["ignore", "pipe", "pipe"] });
