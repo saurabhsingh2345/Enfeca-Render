@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import os from "node:os";
+import { Worker } from "node:worker_threads";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -853,6 +855,98 @@ function makeLazyBgLoop({ files, fps }, keep = 6) {
       return img;
     },
   };
+}
+
+/** How many scenes render at once under ENGINE=fast (override: RENDER_SCENE_CONCURRENCY). */
+function sceneConcurrency() {
+  const forced = Number(process.env.RENDER_SCENE_CONCURRENCY);
+  if (Number.isFinite(forced) && forced >= 1) return Math.floor(forced);
+  return Math.min(6, Math.max(2, Math.floor(os.cpus().length / 2)));
+}
+
+function createLimiter(max) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active >= max || queue.length === 0) return;
+    active += 1;
+    const { fn, resolve, reject } = queue.shift();
+    fn()
+      .then(resolve, reject)
+      .finally(() => {
+        active -= 1;
+        next();
+      });
+  };
+  return (fn) =>
+    new Promise((resolve, reject) => {
+      queue.push({ fn, resolve, reject });
+      next();
+    });
+}
+
+/** Threads still running, so a failed job can stop them instead of leaving them painting. */
+const activeThreads = new Set();
+
+function runOverlayInThread(task) {
+  return new Promise((resolve, reject) => {
+    const thread = new Worker(new URL("./overlay-worker.mjs", import.meta.url), {
+      workerData: task,
+    });
+    activeThreads.add(thread);
+    let settled = false;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+    thread.once("message", (msg) => {
+      if (!msg?.ok) return settle(reject, new Error(msg?.error || "overlay worker failed"));
+      for (const [k, v] of Object.entries(msg.timings || {})) addTime(k, v);
+      settle(resolve);
+    });
+    thread.once("error", (e) => settle(reject, e));
+    thread.once("exit", (code) => {
+      activeThreads.delete(thread);
+      settle(reject, new Error(`overlay worker exited early (${code})`));
+    });
+  });
+}
+
+/** Runs inside a worker thread: load this scene's files, paint, encode. */
+export async function runOverlayTask(task) {
+  timings = new Map();
+  const assets = { elementImgs: new Map() };
+  if (task.assets.bgImg) {
+    try {
+      assets.bgImg = await loadImage(task.assets.bgImg);
+    } catch (e) {
+      console.warn("[agent] scene still", e);
+    }
+  }
+  for (const el of task.assets.elements) {
+    try {
+      assets.elementImgs.set(el.id, await loadImage(el.path));
+    } catch (e) {
+      console.warn("[agent] element skip", el.id, e);
+    }
+  }
+  await encodeOverlayFrames({
+    ffmpeg: task.ffmpeg,
+    scene: task.scene,
+    W: task.W,
+    H: task.H,
+    fps: task.fps,
+    durSec: task.durSec,
+    workDir: task.workDir,
+    index: task.index,
+    assets,
+    bgLoop: makeLazyBgLoop(task.bgLoop),
+    outSeg: task.outSeg,
+    quality: task.quality,
+    templateTheme: task.templateTheme,
+  });
+  return Object.fromEntries(timings);
 }
 
 function pinStudioPath(pathname, origin) {
@@ -1727,42 +1821,22 @@ export async function encodeExportJob({
   onProgress("baking orange bg loop…", 0.04);
   const bgLoop = await bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps, FAST_ENGINE);
 
-  for (let i = 0; i < scenes.length; i++) {
-    const scene = scenes[i];
-    const frames = sceneFrameCount(scene, fps);
-    const durSec = frames / fps;
-    durs.push(durSec);
-    transitionsMs.push(i < scenes.length - 1 ? transitionAfterMs(scene) : 0);
-    prefetch.prefetchAhead(scenes, i + 1, workDir, studioUrl);
-    const pending = collectSceneDownloads(scene, i, workDir, studioUrl);
-    const waitStartedAt = Date.now();
-    if (pending.length && !sceneDownloadsReady(pending)) {
-      onProgress(
-        `downloading scene ${i + 1}/${scenes.length}…`,
-        0.05 + 0.7 * (i / scenes.length),
-      );
-      await prefetch.waitForScene(scene, i, workDir, studioUrl);
-    } else if (pending.length) {
-      prefetchHits += 1;
-    }
-    const waitedMs = Date.now() - waitStartedAt;
-    downloadWaitMs += waitedMs;
-    console.log(
-      `[agent] scene ${i + 1}/${scenes.length} asset-wait ${waitedMs}ms files=${pending.length} hit=${pending.length > 0 && waitedMs < 50}`,
-    );
-    onProgress(
-      `encoding scene ${i + 1}/${scenes.length}…`,
-      0.05 + 0.7 * ((i + 0.5) / scenes.length),
-    );
+  const sceneTasks = [];
+  let sceneError = null;
+  let scenesDone = 0;
+  const limit = createLimiter(sceneConcurrency());
+  if (FAST_ENGINE) {
+    console.log(`[agent] rendering up to ${sceneConcurrency()} scenes at once`);
+  }
 
+  const encodeScene = async (i, scene, frames, durSec) => {
     const seg = path.join(workDir, `seg-${String(i).padStart(3, "0")}.mp4`);
 
     // Resume caching:
     // If the final per-scene segment exists, we can skip all intermediate
     // frame/audio/image work for that scene.
     if (fs.existsSync(seg) && fs.statSync(seg).size > 1000) {
-      segments.push(seg);
-      continue;
+      return seg;
     }
 
     let mediaUrl = null;
@@ -1874,11 +1948,11 @@ export async function encodeExportJob({
         overlaid,
       ]);
       await fitVideoToFrames(ffmpeg, overlaid, seg, frames, fps, quality);
-      segments.push(seg);
-      continue;
+      return seg;
     }
 
     const assets = { elementImgs: new Map() };
+    const fastAssets = { bgImg: null, elements: [] };
     const skipFullBackground = shouldSkipFullBackground(scene);
     // Never use full composite as underlay for upload-image timelines (shows whole image at once)
     const still = resolveAssetUrl(
@@ -1893,7 +1967,8 @@ export async function encodeExportJob({
       try {
         const p = path.join(workDir, `still-${i}${extFromUrl(still, ".png")}`);
         await fetchToFile(still, p, authToken);
-        assets.bgImg = await loadImage(p);
+        if (FAST_ENGINE) fastAssets.bgImg = p;
+        else assets.bgImg = await loadImage(p);
       } catch (e) {
         console.warn("[agent] scene still", e);
       }
@@ -1905,7 +1980,8 @@ export async function encodeExportJob({
         if (u && (/^https?:\/\//i.test(u) || u.startsWith("data:"))) {
           const p = path.join(workDir, `cover-bg-${i}${extFromUrl(u, ".png")}`);
           await fetchToFile(u, p, authToken);
-          assets.bgImg = await loadImage(p);
+          if (FAST_ENGINE) fastAssets.bgImg = p;
+          else assets.bgImg = await loadImage(p);
         }
       } catch (e) {
         console.warn("[agent] cover bg", e);
@@ -1918,10 +1994,30 @@ export async function encodeExportJob({
         if (!u || (!/^https?:\/\//i.test(u) && !u.startsWith("data:"))) continue;
         const p = path.join(workDir, `el-${i}-${el.id}${extFromUrl(u, ".png")}`);
         await fetchToFile(u, p, authToken);
-        assets.elementImgs.set(el.id, await loadImage(p));
+        if (FAST_ENGINE) fastAssets.elements.push({ id: el.id, path: p });
+        else assets.elementImgs.set(el.id, await loadImage(p));
       } catch (e) {
         console.warn("[agent] element skip", el.id, e);
       }
+    }
+
+    if (FAST_ENGINE) {
+      await runOverlayInThread({
+        ffmpeg,
+        scene,
+        W,
+        H,
+        fps,
+        durSec,
+        workDir,
+        index: i,
+        assets: fastAssets,
+        bgLoop,
+        outSeg: seg,
+        quality,
+        templateTheme: payload.templateTheme,
+      });
+      return seg;
     }
 
     await encodeOverlayFrames({
@@ -1939,9 +2035,62 @@ export async function encodeExportJob({
       quality,
       templateTheme: payload.templateTheme,
     });
-    segments.push(seg);
+    return seg;
+  };
+
+  for (let i = 0; i < scenes.length; i++) {
+    const scene = scenes[i];
+    const frames = sceneFrameCount(scene, fps);
+    const durSec = frames / fps;
+    durs.push(durSec);
+    transitionsMs.push(i < scenes.length - 1 ? transitionAfterMs(scene) : 0);
+    prefetch.prefetchAhead(scenes, i + 1, workDir, studioUrl);
+    const pending = collectSceneDownloads(scene, i, workDir, studioUrl);
+    const waitStartedAt = Date.now();
+    if (pending.length && !sceneDownloadsReady(pending)) {
+      onProgress(
+        `downloading scene ${i + 1}/${scenes.length}…`,
+        0.05 + 0.7 * (i / scenes.length),
+      );
+      await prefetch.waitForScene(scene, i, workDir, studioUrl);
+    } else if (pending.length) {
+      prefetchHits += 1;
+    }
+    const waitedMs = Date.now() - waitStartedAt;
+    downloadWaitMs += waitedMs;
+    console.log(
+      `[agent] scene ${i + 1}/${scenes.length} asset-wait ${waitedMs}ms files=${pending.length} hit=${pending.length > 0 && waitedMs < 50}`,
+    );
+    onProgress(
+      `encoding scene ${i + 1}/${scenes.length}…`,
+      0.05 + 0.7 * ((i + 0.5) / scenes.length),
+    );
+
+    if (sceneError) throw sceneError;
+    if (FAST_ENGINE) {
+      sceneTasks.push(
+        limit(() => encodeScene(i, scene, frames, durSec))
+          .then((seg) => {
+            segments[i] = seg;
+            scenesDone += 1;
+            onProgress(
+              `encoded ${scenesDone}/${scenes.length} scenes…`,
+              0.05 + 0.7 * (scenesDone / scenes.length),
+            );
+          })
+          .catch((e) => {
+            sceneError = sceneError || e;
+          }),
+      );
+    } else {
+      segments[i] = await encodeScene(i, scene, frames, durSec);
+    }
   }
+  await Promise.all(sceneTasks);
+  if (sceneError) throw sceneError;
   } finally {
+    // A failed or cancelled job must not leave scene threads painting.
+    for (const thread of activeThreads) thread.terminate();
     prefetch.stop();
   }
 
