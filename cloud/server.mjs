@@ -30,7 +30,9 @@ const WATCHING = new Set();
 const CANCELLED = new Set();
 /** @type {Set<string>} */
 const AUTO_CLAIMING = new Set();
-const CLAIM_IDLE_MS = 12_000;
+// How long to wait between polls for work. Default unchanged; CLAIM_IDLE_MS lets one
+// machine poll faster (min 1s) when it needs to win a claim against others.
+const CLAIM_IDLE_MS = Number(process.env.CLAIM_IDLE_MS) >= 1000 ? Number(process.env.CLAIM_IDLE_MS) : 12_000;
 const PROGRESS_HEARTBEAT_MS = 25_000;
 
 function isCancelled(bundleId) {
@@ -1045,7 +1047,35 @@ async function findRenderJob(id) {
   return hit || null;
 }
 
+/**
+ * CLAIM_ONLY=word,word  — for a canary run next to other machines. This machine
+ * then claims only when the oldest waiting job's part title, episode title or
+ * requester contains one of the words, and leaves every other job alone.
+ */
+function claimOnlyTerms() {
+  return String(process.env.CLAIM_ONLY || "")
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+async function oldestWaitingJobMatches(terms) {
+  const res = await studioFetch("/api/public/render/jobs?status=queued");
+  const data = await res.json();
+  const waiting = (data?.jobs ?? [])
+    .filter((j) => j.status === "queued")
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const oldest = waiting[0];
+  if (!oldest) return false;
+  const text = [oldest.partTitle, oldest.episodeTitle, oldest.requestedByEmail]
+    .join(" ")
+    .toLowerCase();
+  return terms.some((t) => text.includes(t));
+}
+
 async function claimNextRenderJob(machine = renderMachine()) {
+  const terms = claimOnlyTerms();
+  if (terms.length && !(await oldestWaitingJobMatches(terms))) return null;
   const res = await studioFetch("/api/public/render/claim", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
