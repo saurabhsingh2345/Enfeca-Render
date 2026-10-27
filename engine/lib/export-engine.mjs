@@ -1711,6 +1711,28 @@ async function concatHard(ffmpeg, segments, outPath, fps, totalFrames) {
     listFile,
     segments.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"),
   );
+  if (FAST_ENGINE) {
+    // Every segment is already x264 yuv420p at the same size and frame rate,
+    // so join them without decoding and re-encoding the whole video again.
+    await timedRun("ffmpeg:concat", ffmpeg, [
+      "-y",
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      listFile,
+      "-c:v",
+      "copy",
+      "-an",
+      "-frames:v",
+      String(Math.max(1, totalFrames)),
+      "-movflags",
+      "+faststart",
+      outPath,
+    ]);
+    return;
+  }
   await timedRun("ffmpeg:concat", ffmpeg, [
     "-y",
     "-f",
