@@ -114,6 +114,88 @@ async function timedRun(tag, cmd, args) {
   }
 }
 
+/**
+ * ENGINE=fast turns on the optimised render paths. Unset, the worker behaves
+ * exactly as before, so a Mac can be switched back by clearing one setting.
+ */
+const FAST_ENGINE = String(process.env.ENGINE || "").toLowerCase() === "fast";
+
+/**
+ * Paint frames and stream them to ffmpeg as raw RGBA, instead of saving a PNG
+ * per frame and re-reading the folder. PNG encoding was ~70% of a render and
+ * runs on one core; raw pixels cost almost nothing and the picture is the same
+ * (both are lossless before x264).
+ */
+async function encodeRawFrames({ ffmpeg, W, H, fps, count, outPath, quality, cfr, tag, frame }) {
+  const args = [
+    "-y",
+    "-f",
+    "rawvideo",
+    "-pix_fmt",
+    "rgba",
+    "-s",
+    `${W}x${H}`,
+    "-framerate",
+    String(fps),
+    "-i",
+    "pipe:0",
+    "-frames:v",
+    String(count),
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    quality === "hd" ? "20" : "23",
+    "-pix_fmt",
+    "yuv420p",
+  ];
+  if (cfr) args.push("-r", String(fps), "-vsync", "cfr");
+  args.push("-an", outPath);
+
+  const t0 = performance.now();
+  const proc = spawn(ffmpeg, args, { stdio: ["pipe", "ignore", "pipe"] });
+  let err = "";
+  proc.stderr.on("data", (d) => {
+    err = (err + String(d)).slice(-1200);
+  });
+  let stdinError = null;
+  proc.stdin.on("error", (e) => {
+    stdinError = e;
+  });
+  const closed = new Promise((resolve, reject) => {
+    proc.on("error", reject);
+    proc.on("close", (code) =>
+      code === 0 ? resolve() : reject(new Error(`ffmpeg failed (${code}): ${err}`)),
+    );
+  });
+  // Surface ffmpeg's own error below; don't let it count as unhandled while we paint.
+  closed.catch(() => {});
+  const ended = closed.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  try {
+    for (let i = 0; i < count && !stdinError; i++) {
+      const tPaint = performance.now();
+      const canvas = await frame(i);
+      const pixels = canvas.data();
+      const tWrite = performance.now();
+      addTime("frames:paint", tWrite - tPaint);
+      if (!proc.stdin.write(pixels)) {
+        await Promise.race([new Promise((r) => proc.stdin.once("drain", r)), ended]);
+      }
+      addTime("frames:pipe-write", performance.now() - tWrite);
+      addTime("frames:count", 1);
+    }
+  } finally {
+    proc.stdin.end();
+  }
+  await closed;
+  addTime(tag, performance.now() - t0);
+}
+
 /** Probe media duration in seconds (ffmpeg stderr). */
 async function probeDurationSec(ffmpeg, file) {
   return new Promise((resolve) => {
@@ -1111,12 +1193,38 @@ async function encodeOverlayFrames({
   quality,
   templateTheme,
 }) {
-  const framesDir = path.join(workDir, `frames-${index}`);
-  fs.mkdirSync(framesDir, { recursive: true });
   const sampleFps = fps;
   const speechMs = revealSpeechMs(scene);
   // Paint on the output clock (i/fps), not i/(n-1), so hold/slide stay after speech.
   const n = Math.max(2, Math.round(durSec * sampleFps));
+  if (FAST_ENGINE) {
+    await encodeRawFrames({
+      ffmpeg,
+      W,
+      H,
+      fps,
+      count: n,
+      outPath: outSeg,
+      quality,
+      cfr: true,
+      tag: "step:overlay-frames+encode",
+      frame: (i) =>
+        paintSceneAtElapsed(
+          createCanvas,
+          scene,
+          W,
+          H,
+          (i / sampleFps) * 1000,
+          speechMs,
+          assets,
+          bgLoop,
+          templateTheme,
+        ),
+    });
+    return;
+  }
+  const framesDir = path.join(workDir, `frames-${index}`);
+  fs.mkdirSync(framesDir, { recursive: true });
   for (let i = 0; i < n; i++) {
     const sceneElapsed = (i / sampleFps) * 1000;
     const tPaint = performance.now();
@@ -1349,37 +1457,60 @@ async function applySegmentSlide({
   const fromImg = await loadImage(fromPng);
   const toImg = await loadImage(toPng);
 
-  const framesDir = path.join(workDir, `slide-frames-${index}`);
-  fs.mkdirSync(framesDir, { recursive: true });
-  for (let f = 0; f < slideFrames; f++) {
-    const slideT = slideFrames <= 1 ? 1 : f / (slideFrames - 1);
-    const canvas = compositeSlideCanvas(createCanvas, fromImg, toImg, W, H, slideT);
-    fs.writeFileSync(
-      path.join(framesDir, `f-${String(f).padStart(5, "0")}.png`),
-      canvas.toBuffer("image/png"),
-    );
-  }
-
   const slideMp4 = path.join(workDir, `slide-${index}.mp4`);
-  await timedRun("ffmpeg:slide-encode", ffmpeg, [
-    "-y",
-    "-framerate",
-    String(fps),
-    "-i",
-    path.join(framesDir, "f-%05d.png"),
-    "-frames:v",
-    String(slideFrames),
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    quality === "hd" ? "20" : "23",
-    "-pix_fmt",
-    "yuv420p",
-    "-an",
-    slideMp4,
-  ]);
+  if (FAST_ENGINE) {
+    await encodeRawFrames({
+      ffmpeg,
+      W,
+      H,
+      fps,
+      count: slideFrames,
+      outPath: slideMp4,
+      quality,
+      cfr: false,
+      tag: "step:slide-frames+encode",
+      frame: (f) =>
+        compositeSlideCanvas(
+          createCanvas,
+          fromImg,
+          toImg,
+          W,
+          H,
+          slideFrames <= 1 ? 1 : f / (slideFrames - 1),
+        ),
+    });
+  } else {
+    const framesDir = path.join(workDir, `slide-frames-${index}`);
+    fs.mkdirSync(framesDir, { recursive: true });
+    for (let f = 0; f < slideFrames; f++) {
+      const slideT = slideFrames <= 1 ? 1 : f / (slideFrames - 1);
+      const canvas = compositeSlideCanvas(createCanvas, fromImg, toImg, W, H, slideT);
+      fs.writeFileSync(
+        path.join(framesDir, `f-${String(f).padStart(5, "0")}.png`),
+        canvas.toBuffer("image/png"),
+      );
+    }
+
+    await timedRun("ffmpeg:slide-encode", ffmpeg, [
+      "-y",
+      "-framerate",
+      String(fps),
+      "-i",
+      path.join(framesDir, "f-%05d.png"),
+      "-frames:v",
+      String(slideFrames),
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      quality === "hd" ? "20" : "23",
+      "-pix_fmt",
+      "yuv420p",
+      "-an",
+      slideMp4,
+    ]);
+  }
 
   const trimMp4 = path.join(workDir, `trim-${index}.mp4`);
   // Keep the hold portion (speech + 2s wait); only the last 1s becomes the slide.
