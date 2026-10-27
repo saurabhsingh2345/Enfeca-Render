@@ -758,7 +758,7 @@ function revealSpeechMs(scene) {
   return Math.max(200, base);
 }
 
-async function bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps) {
+async function bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps, lazy = false) {
   const framesDir = path.join(workDir, "bg-loop-frames");
   const sampleFps = Math.min(15, fps);
 
@@ -774,6 +774,10 @@ async function bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps) {
   const hasPng = existing.some((n) => /\.png$/i.test(n));
 
   if (hasJpg) {
+    if (lazy) {
+      const jpgs = existing.filter((n) => /\.jpg$/i.test(n));
+      return { files: jpgs.map((f) => path.join(framesDir, f)), fps: sampleFps };
+    }
     const imgs = [];
     for (const f of existing.filter((n) => /\.jpg$/i.test(n))) {
       imgs.push(await loadImage(path.join(framesDir, f)));
@@ -820,11 +824,35 @@ async function bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps) {
   const ordered = files.filter((n) => /\.jpg$/i.test(n)).length
     ? files.filter((n) => /\.jpg$/i.test(n))
     : files;
+  if (lazy) {
+    return { files: ordered.map((f) => path.join(framesDir, f)), fps: sampleFps };
+  }
   for (const f of ordered) {
     // loadImage handles both jpg/png; for the fallback we wrote png.
     imgs.push(await loadImage(path.join(framesDir, f)));
   }
   return { imgs, fps: sampleFps };
+}
+
+/**
+ * Background loop that decodes a frame only when it is drawn. Decoding all ~280
+ * frames up front held ~2.2 GB of RAM for the whole job; a scene walks the loop
+ * in order, so a handful of cached frames is enough.
+ */
+function makeLazyBgLoop({ files, fps }, keep = 6) {
+  const cache = new Map();
+  return {
+    fps,
+    count: files.length,
+    async frameAt(idx) {
+      const hit = cache.get(idx);
+      if (hit) return hit;
+      const img = await loadImage(files[idx]);
+      cache.set(idx, img);
+      if (cache.size > keep) cache.delete(cache.keys().next().value);
+      return img;
+    },
+  };
 }
 
 function pinStudioPath(pathname, origin) {
@@ -1158,10 +1186,14 @@ async function paintSceneAtElapsed(
   templateTheme,
 ) {
   const speechT01 = Math.min(1, sceneElapsed / Math.max(1, speechMs));
+  const bgCount = bgLoop?.count ?? bgLoop?.imgs?.length ?? 0;
   const bgIdx =
-    bgLoop?.imgs?.length > 0
-      ? Math.floor(((sceneElapsed / 1000) * (bgLoop.fps || 15)) % bgLoop.imgs.length)
-      : 0;
+    bgCount > 0 ? Math.floor(((sceneElapsed / 1000) * (bgLoop.fps || 15)) % bgCount) : 0;
+  const bgLoopFrame = bgLoop?.frameAt
+    ? bgCount > 0
+      ? await bgLoop.frameAt(bgIdx)
+      : null
+    : bgLoop?.imgs?.[bgIdx] || null;
   const theme = resolveTemplateTheme(scene, templateTheme);
   return paintCanvasScene(
     createCanvas,
@@ -1171,7 +1203,7 @@ async function paintSceneAtElapsed(
     speechT01,
     {
       ...assets,
-      bgLoopFrame: bgLoop?.imgs?.[bgIdx] || null,
+      bgLoopFrame,
     },
     speechMs,
     { sceneElapsedMs: sceneElapsed, speechMs, templateTheme: theme },
@@ -1693,7 +1725,7 @@ export async function encodeExportJob({
 
   try {
   onProgress("baking orange bg loop…", 0.04);
-  const bgLoop = await bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps);
+  const bgLoop = await bakeBgLoopFrames(ffmpeg, bgFile, W, H, workDir, fps, FAST_ENGINE);
 
   for (let i = 0; i < scenes.length; i++) {
     const scene = scenes[i];
@@ -1902,7 +1934,7 @@ export async function encodeExportJob({
       workDir,
       index: i,
       assets,
-      bgLoop,
+      bgLoop: FAST_ENGINE ? makeLazyBgLoop(bgLoop) : bgLoop,
       outSeg: seg,
       quality,
       templateTheme: payload.templateTheme,
