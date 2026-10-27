@@ -2113,7 +2113,7 @@ export async function encodeExportJob({
   }
   // Paint right-to-left swap into the last transitionMs of each scene window
   // (after the hold). Window length stays exact → audio stays synced.
-  for (let i = 0; i < segments.length - 1; i++) {
+  const slideOne = async (i, fromSeg, toSeg) => {
     const tMs = transitionsMs[i] || DEFAULT_TRANSITION_MS;
     onProgress(
       `slide ${i + 1}→${i + 2} (${Math.round(tMs)}ms)…`,
@@ -2125,14 +2125,13 @@ export async function encodeExportJob({
         `seg-slide-${String(i).padStart(3, "0")}.mp4`,
       );
       if (fs.existsSync(merged) && fs.statSync(merged).size > 1000) {
-        segments[i] = merged;
-        continue;
+        return merged;
       }
 
-      segments[i] = await applySegmentSlide({
+      return await applySegmentSlide({
         ffmpeg,
-        fromSeg: segments[i],
-        toSeg: segments[i + 1],
+        fromSeg,
+        toSeg,
         durSec: durs[i],
         transitionMs: tMs,
         workDir,
@@ -2144,6 +2143,24 @@ export async function encodeExportJob({
       });
     } catch (e) {
       console.warn(`[agent] slide ${i}→${i + 1} failed, keeping hard cut`, e);
+      return fromSeg;
+    }
+  };
+  if (FAST_ENGINE) {
+    // Each slide reads the original neighbouring segments, never another slide's
+    // output, so they can all run at once.
+    const original = segments.slice();
+    const slideLimit = createLimiter(sceneConcurrency());
+    await Promise.all(
+      original.slice(0, -1).map((_, i) =>
+        slideLimit(async () => {
+          segments[i] = await slideOne(i, original[i], original[i + 1]);
+        }),
+      ),
+    );
+  } else {
+    for (let i = 0; i < segments.length - 1; i++) {
+      segments[i] = await slideOne(i, segments[i], segments[i + 1]);
     }
   }
 
