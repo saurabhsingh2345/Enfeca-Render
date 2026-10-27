@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { buildFixture } from "./fixture.mjs";
 
@@ -107,8 +107,11 @@ console.log(`[bench:${label}] job ${jobId}, ${(totalMs / 1000).toFixed(1)}s of v
 
 let last = "";
 let job;
+let peakRssMB = 0;
 for (;;) {
   await new Promise((r) => setTimeout(r, 1500));
+  const rss = Number(spawnSync("ps", ["-o", "rss=", "-p", String(agent.pid)], { encoding: "utf8" }).stdout) / 1024;
+  if (rss > peakRssMB) peakRssMB = rss;
   job = (await api("GET", `/api/jobs/${jobId}`)).job;
   const line = `${job.status} ${Math.round(job.progress * 100)}% ${job.stage}`;
   if (line !== last) {
@@ -136,6 +139,7 @@ const result = {
   videoSec: totalMs / 1000,
   wallSec: Number(wallSec.toFixed(1)),
   xRealtime: Number((wallSec / (totalMs / 1000)).toFixed(2)),
+  workerPeakRssMB: Math.round(peakRssMB),
   out: outFile,
 };
 fs.writeFileSync(path.join(workDir, `result-${label}.json`), JSON.stringify(result, null, 2));
