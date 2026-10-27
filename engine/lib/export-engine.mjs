@@ -274,7 +274,16 @@ function isVideoClipScene(scene) {
 }
 
 function isBumperScene(scene) {
-  return /common-intro|common-outro/i.test(String(scene?.mediaUrl || ""));
+  if (/common-intro|common-outro/i.test(String(scene?.mediaUrl || ""))) return true;
+  // A course can replace the brand intro/outro with its own upload, which has any
+  // filename. Studio still labels those scenes "Intro"/"Outro" (see
+  // commonBumperLabelForScene), so go by the label too — otherwise the clip is
+  // treated as a screen recording and stretched to fill the card.
+  return (
+    FAST_ENGINE &&
+    (scene?.subtitle === "Intro" || scene?.subtitle === "Outro") &&
+    scene?.recordingUseEmbeddedAudio === true
+  );
 }
 
 /** Auto matte scan disabled — IDE chrome was misread as letterboxing and zoomed clips. */
