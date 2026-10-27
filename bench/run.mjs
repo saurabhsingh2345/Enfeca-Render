@@ -22,6 +22,9 @@ const label = process.argv[3] ?? "run";
 const customOutro = process.argv.includes("--custom-outro");
 const brokenRecording = process.argv.includes("--broken-recording");
 const relativeRoot = process.argv.includes("--relative-root");
+const l5eOutro = process.argv.includes("--l5e-outro");
+// --no-fallback leaves the fallback host unset, to reproduce the failure.
+const noFallback = process.argv.includes("--no-fallback");
 if (!process.argv[2]) {
   console.error("usage: node bench/run.mjs <workDir> <label> [--custom-outro]");
   process.exit(1);
@@ -30,11 +33,15 @@ if (!process.argv[2]) {
 const ASSET_PORT = 8765;
 const AGENT_PORT = 3863;
 
-const fixtureDir = path.join(workDir, customOutro ? "fixture-custom-outro" : "fixture");
-const { payload, totalMs } = buildFixture(fixtureDir, { customOutro, brokenRecording });
+const fixtureDir = path.join(workDir, customOutro ? "fixture-custom-outro" : l5eOutro ? "fixture-l5e" : "fixture");
+const { payload, totalMs } = buildFixture(fixtureDir, { customOutro, brokenRecording, l5eOutro });
 
-const assetServer = http.createServer((req, res) => {
+const makeAssetServer = (hideL5e) => http.createServer((req, res) => {
   const rel = decodeURIComponent(new URL(req.url, "http://x").pathname);
+  if (hideL5e && rel.startsWith("/__l5e/")) {
+    res.writeHead(404).end();
+    return;
+  }
   const file = path.join(fixtureDir, rel);
   if (!file.startsWith(fixtureDir) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     res.writeHead(404).end();
@@ -44,7 +51,11 @@ const assetServer = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Length": size });
   fs.createReadStream(file).pipe(res);
 });
+const assetServer = makeAssetServer(l5eOutro);
 await new Promise((r) => assetServer.listen(ASSET_PORT, "127.0.0.1", r));
+const FALLBACK_PORT = 8766;
+const fallbackServer = makeAssetServer(false);
+await new Promise((r) => fallbackServer.listen(FALLBACK_PORT, "127.0.0.1", r));
 
 const agentData = path.join(workDir, `agent-${label}`);
 fs.rmSync(agentData, { recursive: true, force: true });
@@ -58,6 +69,7 @@ const env = {
   // in the README), which is what once broke the final concat.
   AGENT_DATA_ROOT: relativeRoot ? path.relative(engineDir, agentData) : agentData,
   RENDER_API_KEY: "",
+  ASSET_FALLBACK_ORIGIN: noFallback ? "" : `http://127.0.0.1:${FALLBACK_PORT}`,
 };
 const agent = spawn("node", ["server.mjs"], { cwd: engineDir, env, stdio: ["ignore", "pipe", "pipe"] });
 const logPath = path.join(workDir, `log-${label}.txt`);
@@ -136,6 +148,7 @@ if (job.status === "done") {
 
 agent.kill();
 assetServer.close();
+fallbackServer.close();
 const result = {
   label,
   status: job.status,

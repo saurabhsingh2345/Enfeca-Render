@@ -36,7 +36,7 @@ function png(file, w, h, paint) {
   fs.writeFileSync(file, c.toBuffer("image/png"));
 }
 
-export function buildFixture(outDir, { customOutro = false, brokenRecording = false } = {}) {
+export function buildFixture(outDir, { customOutro = false, brokenRecording = false, l5eOutro = false } = {}) {
   fs.mkdirSync(path.join(outDir, "files"), { recursive: true });
   const files = path.join(outDir, "files");
 
@@ -47,9 +47,16 @@ export function buildFixture(outDir, { customOutro = false, brokenRecording = fa
   }
 
   // Outro: 16:9 brand-style clip, or a 4:3 course override with its own name.
-  const outroName = customOutro ? "files/course-outro-7f3a9c.mp4" : "common-outro.mp4";
+  // l5eOutro: the brand outro is referenced by a Lovable-hosted path that the Studio
+  // host does not serve, as in production (/__l5e/assets-v1/<id>/common-outro.mp4).
+  const outroName = customOutro
+    ? "files/course-outro-7f3a9c.mp4"
+    : l5eOutro
+      ? "__l5e/assets-v1/test/common-outro.mp4"
+      : "common-outro.mp4";
   const outroSize = customOutro ? "1440x1080" : "1920x1080";
   const outroFile = path.join(outDir, outroName);
+  fs.mkdirSync(path.dirname(outroFile), { recursive: true });
   if (!fs.existsSync(outroFile)) {
     ff(["-f", "lavfi", "-i", `testsrc2=size=${outroSize}:rate=30:duration=6`, "-pix_fmt", "yuv420p", outroFile]);
   }
@@ -146,6 +153,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { totalMs } = buildFixture(path.resolve(outDir), {
     customOutro: process.argv.includes("--custom-outro"),
     brokenRecording: process.argv.includes("--broken-recording"),
+    l5eOutro: process.argv.includes("--l5e-outro"),
   });
   console.log(`fixture ready in ${outDir} (${(totalMs / 1000).toFixed(1)}s of video)`);
 }
