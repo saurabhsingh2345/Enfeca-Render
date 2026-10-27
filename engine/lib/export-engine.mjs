@@ -1069,12 +1069,12 @@ async function fetchToFile(url, dest, authToken, { retries = 3 } = {}) {
     }
   }
 
-  async function tryDownload(targetUrl, timeoutMs = 10 * 60 * 1000) {
+  async function tryDownload(targetUrl, timeoutMs = 10 * 60 * 1000, { auth = true } = {}) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       let url = String(targetUrl);
-      let headers = renderAuthHeaders();
+      let headers = auth ? renderAuthHeaders() : {};
       for (let hop = 0; hop < 8; hop++) {
         const res = await fetch(url, {
           headers,
@@ -1194,6 +1194,23 @@ async function fetchToFile(url, dest, authToken, { retries = 3 } = {}) {
     if (attempt < retries) {
       await new Promise((r) => setTimeout(r, 500 * attempt));
       continue;
+    }
+
+    // Brand intro/outro are referenced by Lovable-hosted paths (/__l5e/assets-v1/…)
+    // that the self-hosted Studio does not serve (404), which failed every part
+    // ending in the brand outro at its last scene. Those files are public on the
+    // Lovable app, so try it for that path only, without the render key.
+    if (pathMatch && pathMatch.startsWith("/__l5e/")) {
+      const origin = String(
+        process.env.ASSET_FALLBACK_ORIGIN ?? "https://divstudio.lovable.app",
+      ).replace(/\/+$/, "");
+      if (origin) {
+        try {
+          return await tryDownload(`${origin}${pathMatch}`, 10 * 60 * 1000, { auth: false });
+        } catch (e) {
+          lastErr = e;
+        }
+      }
     }
 
     const local = await tryLocalStudioFallback();
