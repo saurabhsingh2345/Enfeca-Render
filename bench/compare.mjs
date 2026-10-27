@@ -4,6 +4,8 @@
  *
  *   node bench/compare.mjs <reference.mp4> <candidate.mp4>
  */
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -39,8 +41,24 @@ const stats = ff(["-i", ref, "-i", cand, "-lavfi", "[0:v][1:v]ssim;[0:v][1:v]psn
 const ssim = /SSIM[^\n]*All:([\d.]+)/.exec(stats)?.[1];
 const psnr = /PSNR[^\n]*average:([\w.]+)/.exec(stats)?.[1];
 
-console.log(JSON.stringify({ reference: a, candidate: b, ssim, psnr }, null, 2));
+// Per-frame SSIM: a one-frame glitch at a scene join barely moves the average.
+const statsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ssim-")), "frames.txt");
+ff(["-i", ref, "-i", cand, "-lavfi", `[0:v][1:v]ssim=stats_file=${statsFile}`, "-f", "null", "-"]);
+const perFrame = fs
+  .readFileSync(statsFile, "utf8")
+  .split("\n")
+  .filter(Boolean)
+  .map((l) => ({ n: Number(/n:(\d+)/.exec(l)?.[1]), all: Number(/All:([\d.]+)/.exec(l)?.[1]) }))
+  .sort((x, y) => x.all - y.all);
+const worst = perFrame[0];
+
+console.log(JSON.stringify({ reference: a, candidate: b, ssim, psnr, worstFrame: worst }, null, 2));
 const frameDelta = Math.abs(a.frames - b.frames);
-const ok = frameDelta === 0 && Math.abs(a.durationSec - b.durationSec) < 0.05 && a.hasAudio === b.hasAudio && Number(ssim) >= 0.99;
+const ok =
+  frameDelta === 0 &&
+  Math.abs(a.durationSec - b.durationSec) < 0.05 &&
+  a.hasAudio === b.hasAudio &&
+  Number(ssim) >= 0.99 &&
+  (worst?.all ?? 0) >= 0.97;
 console.log(ok ? "MATCH" : "DIFFERENT");
 process.exit(ok ? 0 : 2);
