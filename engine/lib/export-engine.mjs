@@ -2103,6 +2103,11 @@ export async function encodeExportJob({
       continue;
     }
     const frames = Math.max(1, Math.round(durs[i] * fps));
+    // Scene segments are already encoded to exactly this many frames (overlay
+    // scenes paint `frames`, recordings go through fitVideoToFrames), so under
+    // ENGINE=fast the extra re-encode is skipped. A 1-frame scene is the one case
+    // where the overlay path paints 2, so it still goes through the fit.
+    if (FAST_ENGINE && frames >= 2) continue;
     await fitVideoToFrames(ffmpeg, segments[i], fitted, frames, fps, quality);
     segments[i] = fitted;
   }
